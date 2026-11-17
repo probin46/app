@@ -1,10 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:country_picker/country_picker.dart'; // Stable replacement
+import 'package:country_picker/country_picker.dart';
 
 import '../../providers/auth_provider.dart' show LumaAuthProvider;
 
@@ -39,7 +41,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // PHONE NORMALIZATION
+  // PHONE NORMALIZATION (last 10 digits, ignores +, spaces, leading 0)
   // ═══════════════════════════════════════════════════════════════════════
   String _normalizePhone(String raw) {
     final digits = raw.replaceAll(RegExp(r'[^\d]'), '');
@@ -67,9 +69,21 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
       final lumaUsersSnap =
           await FirebaseFirestore.instance.collection('users').get();
-      final lumaUsers = lumaUsersSnap.docs
-          .map((doc) => {'id': doc.id, ...doc.data()})
-          .toList();
+
+      // Build a lookup: normalized phone -> user data.
+      // PhoneEntryScreen stores the number in "phone" (older docs may use
+      // "phone_number"), so we check both.
+      final Map<String, Map<String, dynamic>> lumaByPhone = {};
+      for (final doc in lumaUsersSnap.docs) {
+        if (doc.id == _currentUserId) continue; // skip yourself
+        final data = doc.data();
+        final rawUserPhone =
+            (data['phone'] ?? data['phone_number'] ?? '').toString();
+        final key = _normalizePhone(rawUserPhone);
+        if (key.isNotEmpty) {
+          lumaByPhone[key] = {'id': doc.id, ...data};
+        }
+      }
 
       final matched = <Map<String, dynamic>>[];
       final invites = <Map<String, dynamic>>[];
@@ -84,17 +98,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
         processedNumbers.add(phone);
 
         final displayName = c.displayName.isNotEmpty ? c.displayName : rawPhone;
+        final lumaUser = lumaByPhone[phone];
 
-        final lumaUser = lumaUsers.firstWhere(
-          (u) {
-            final lumaPhone =
-                _normalizePhone((u['phone_number'] ?? '').toString());
-            return lumaPhone.isNotEmpty && lumaPhone == phone;
-          },
-          orElse: () => {},
-        );
-
-        if (lumaUser.isNotEmpty) {
+        if (lumaUser != null) {
           matched.add({
             'id': lumaUser['id'],
             'name': lumaUser['display_name'] ?? displayName,
@@ -134,25 +140,28 @@ class _ContactsScreenState extends State<ContactsScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  // CHECK IF PHONE IS ON LUMA
+  // CHECK IF PHONE IS ON LUMA (direct query on the "phone" field)
   // ═══════════════════════════════════════════════════════════════════════
-  Future<bool> _isPhoneOnLuma(String fullPhone) async {
+  Future<bool> _isPhoneOnLuma(String countryCode, String input) async {
     try {
-      final digits = fullPhone.replaceAll(RegExp(r'[^\d]'), '');
-      final last10 = digits.length > 10
-          ? digits.substring(digits.length - 10)
-          : digits;
-      if (last10.isEmpty) return false;
+      final digits = input.replaceAll(RegExp(r'\D'), '');
+      if (digits.isEmpty) return false;
+      final noZero = digits.replaceFirst(RegExp(r'^0+'), '');
+      if (noZero.isEmpty) return false;
 
-      final snap =
-          await FirebaseFirestore.instance.collection('users').get();
-      for (final doc in snap.docs) {
-        final data = doc.data();
-        final userPhone =
-            _normalizePhone((data['phone_number'] ?? '').toString());
-        if (userPhone.isNotEmpty && userPhone == last10) return true;
-      }
-      return false;
+      // Match both "+234801..." and "+2340801..." in case of older saved data
+      final candidates = {
+        '+$countryCode$noZero',
+        '+${countryCode}0$noZero',
+        '+$countryCode$digits',
+      }.toList();
+
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .where('phone', whereIn: candidates)
+          .limit(1)
+          .get();
+      return snap.docs.isNotEmpty;
     } catch (e) {
       debugPrint('Luma check error: $e');
       return false;
@@ -169,6 +178,25 @@ class _ContactsScreenState extends State<ContactsScreen> {
     bool isSaving = false;
     bool? isOnLuma;
     bool isChecking = false;
+    Timer? debounce;
+
+    Future<void> runCheck(StateSetter setModalState) async {
+      final raw = phoneCtrl.text.trim();
+      if (raw.isEmpty || selectedCountry == null) {
+        setModalState(() {
+          isOnLuma = null;
+          isChecking = false;
+        });
+        return;
+      }
+      setModalState(() => isChecking = true);
+      final result = await _isPhoneOnLuma(selectedCountry!.phoneCode, raw);
+      if (!mounted) return;
+      setModalState(() {
+        isOnLuma = result;
+        isChecking = false;
+      });
+    }
 
     showModalBottomSheet(
       context: context,
@@ -241,6 +269,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
                                   onSelect: (Country country) {
                                     setModalState(
                                         () => selectedCountry = country);
+                                    // Re-check with the newly picked country
+                                    debounce?.cancel();
+                                    runCheck(setModalState);
                                   },
                                 );
                               },
@@ -271,22 +302,20 @@ class _ContactsScreenState extends State<ContactsScreen> {
                               child: TextField(
                                 controller: phoneCtrl,
                                 keyboardType: TextInputType.phone,
-                                onChanged: (val) async {
-                                  if (val.isEmpty || selectedCountry == null) {
-                                    setModalState(() => isOnLuma = null);
-                                    return;
-                                  }
-                                  final fullPhone =
-                                      '+${selectedCountry!.phoneCode}$val';
-                                  setModalState(() => isChecking = true);
-                                  final result =
-                                      await _isPhoneOnLuma(fullPhone);
-                                  if (mounted) {
+                                onChanged: (val) {
+                                  debounce?.cancel();
+                                  if (val.trim().isEmpty ||
+                                      selectedCountry == null) {
                                     setModalState(() {
-                                      isOnLuma = result;
+                                      isOnLuma = null;
                                       isChecking = false;
                                     });
+                                    return;
                                   }
+                                  debounce = Timer(
+                                    const Duration(milliseconds: 500),
+                                    () => runCheck(setModalState),
+                                  );
                                 },
                                 decoration: const InputDecoration(
                                   hintText: 'Phone Number',
@@ -376,11 +405,16 @@ class _ContactsScreenState extends State<ContactsScreen> {
                                     );
                                     return;
                                   }
+                                  debounce?.cancel();
                                   setModalState(() => isSaving = true);
 
                                   try {
+                                    // Store consistently: +<code><digits without leading 0>
+                                    final digits = phoneCtrl.text
+                                        .replaceAll(RegExp(r'\D'), '')
+                                        .replaceFirst(RegExp(r'^0+'), '');
                                     final fullPhone =
-                                        '+${selectedCountry!.phoneCode}${phoneCtrl.text.trim()}';
+                                        '+${selectedCountry!.phoneCode}$digits';
                                     final name = nameCtrl.text.trim().isEmpty
                                         ? fullPhone
                                         : nameCtrl.text.trim();
@@ -411,7 +445,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                                     if (!mounted) return;
                                     Navigator.pop(ctx);
 
-                                    ScaffoldMessenger.of(context)
+                                    ScaffoldMessenger.of(this.context)
                                         .showSnackBar(
                                       SnackBar(
                                         content: Text(
@@ -427,7 +461,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                                   } catch (e) {
                                     debugPrint('Save contact error: $e');
                                     if (mounted) {
-                                      ScaffoldMessenger.of(context)
+                                      ScaffoldMessenger.of(this.context)
                                           .showSnackBar(
                                         SnackBar(
                                           content: Text(
@@ -437,7 +471,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
                                     }
                                   } finally {
                                     if (mounted) {
-                                      setModalState(() => isSaving = false);
+                                      try {
+                                        setModalState(() => isSaving = false);
+                                      } catch (_) {}
                                     }
                                   }
                                 },
@@ -469,7 +505,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
           },
         );
       },
-    );
+    ).whenComplete(() {
+      debounce?.cancel();
+      nameCtrl.dispose();
+      phoneCtrl.dispose();
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -663,18 +703,15 @@ class _ContactsScreenState extends State<ContactsScreen> {
                                   .where((c) => (c['name'] as String)
                                       .toLowerCase()
                                       .contains(_searchQuery))
-                                  .map((c) =>
-                                      _contactTile(theme, c, true)),
+                                  .map((c) => _contactTile(theme, c, true)),
                             ],
                             if (_inviteContacts.isNotEmpty) ...[
-                              _sectionHeader(
-                                  theme, 'INVITE TO LUMA CHAT'),
+                              _sectionHeader(theme, 'INVITE TO LUMA CHAT'),
                               ..._inviteContacts
                                   .where((c) => (c['name'] as String)
                                       .toLowerCase()
                                       .contains(_searchQuery))
-                                  .map((c) =>
-                                      _contactTile(theme, c, false)),
+                                  .map((c) => _contactTile(theme, c, false)),
                             ],
                             if (_lumaContacts.isEmpty &&
                                 _inviteContacts.isEmpty)
