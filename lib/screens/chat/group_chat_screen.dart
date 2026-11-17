@@ -9,6 +9,7 @@ import 'package:camera/camera.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -3641,7 +3642,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         final cancel = d.offsetFromOrigin.dx < -90;
         if (cancel != _recCancel) setState(() => _recCancel = cancel);
       },
-      onLongPressEnd: (d) => _finishRecording(cancel: d.offsetFromOrigin.dx < -90),
+      onLongPressEnd: (_) => _finishRecording(cancel: _recCancel),
       child: circle,
     );
   }
