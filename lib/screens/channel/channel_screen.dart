@@ -15,8 +15,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:google_generative_ai/google_generative_ai.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:latlong2/latlong2.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
@@ -38,14 +37,11 @@ import '../../services/cloudinary_service.dart';
 // CONFIG
 // ═══════════════════════════════════════════════════════════════════════════
 const String _kGiphyApiKey = '7tXB3cisPGymcszQX85JFOY6kp3Gz47T';
-const String _kGeminiModel = 'gemini-2.0-flash';
 
-// Field names in your Firestore `users` documents.
 const String _kUserPhoneField = 'phone';
 const String _kUserPhoneLegacyField = 'phone_number';
 const String _kUserNameField = 'display_name';
 const String _kUserAvatarField = 'avatar_url';
-const String _kUserOnlineField = 'is_online';
 
 const Color _kAccent = Color(0xFF3390EC);
 const int _kPageSize = 80;
@@ -90,11 +86,6 @@ String _digitsTail(String raw) {
 }
 
 double _c01(double v) => v < 0 ? 0.0 : (v > 1 ? 1.0 : v);
-
-Color _colorForUid(String? uid) {
-  final h = (uid ?? '').codeUnits.fold<int>(0, (a, b) => (a * 31 + b) & 0x7fffffff);
-  return _kNameColors[h % _kNameColors.length];
-}
 
 DateTime _msgTime(Map<String, dynamic> m) {
   final ts = m['created_at'];
@@ -170,9 +161,6 @@ Future<void> _openUrl(String url) async {
   } catch (_) {}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// NATIVE RECORDER
-// ═══════════════════════════════════════════════════════════════════════════
 class LocalRecorder {
   static const _channel = MethodChannel('com.lumachat.app/recorder');
   Future<void> start(String path) async => await _channel.invokeMethod('start', {'path': path});
@@ -210,18 +198,18 @@ class _ChatChoice {
 // ═══════════════════════════════════════════════════════════════════════════
 // SCREEN
 // ═══════════════════════════════════════════════════════════════════════════
-class GroupChatScreen extends StatefulWidget {
-  final String chatId;
-  final String chatName;
-  final String? chatAvatar;
+class ChannelScreen extends StatefulWidget {
+  final String channelId;
+  final String channelName;
+  final String? channelAvatar;
 
-  const GroupChatScreen({super.key, required this.chatId, required this.chatName, this.chatAvatar});
+  const ChannelScreen({super.key, required this.channelId, required this.channelName, this.channelAvatar});
 
   @override
-  State<GroupChatScreen> createState() => _GroupChatScreenState();
+  State<ChannelScreen> createState() => _ChannelScreenState();
 }
 
-class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingObserver {
+class _ChannelScreenState extends State<ChannelScreen> with WidgetsBindingObserver {
   final _messageController = TextEditingController();
   final _messageFocus = FocusNode();
   final _scrollController = ScrollController();
@@ -240,7 +228,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   bool _atBottom = true;
   bool _showFab = false;
 
-  Map<String, dynamic>? _chatData;
+  Map<String, dynamic>? _channelData;
   List> _live = [];
   List> _older = [];
   List> _visible = [];
@@ -251,23 +239,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   bool _noMoreOlder = false;
   bool _firstSnapshotDone = false;
 
-  int _unreadCount = 0;
-  String? _firstUnreadId;
-  String? _dividerAnchorId;
-  int _dividerCount = 0;
-  final Set<String> _deliveredTried = {};
-  final Set<String> _readTried = {};
-
   StreamSubscription? _messageSub;
-  StreamSubscription? _chatSub;
-  StreamSubscription? _typingSub;
+  StreamSubscription? _channelSub;
   StreamSubscription? _premiumSub;
   StreamSubscription? _pinSub;
-  final List<StreamSubscription> _memberSubs = [];
   Timer? _loadingFallback;
   Timer? _ticker;
   Timer? _flashTimer;
-  Timer? _typingTimer;
 
   String? _replyingTo;
   String? _editingId;
@@ -277,17 +255,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   final Map<String, GlobalKey> _msgKeys = {};
 
   final Map<String, Map<String, dynamic>> _userCache = {};
-  final Map<String, DateTime> _typingUsers = {};
-  DateTime? _lastTypingWrite;
-  String _membersKey = '';
-  final Map<int, int> _onlineByChunk = {};
-  int get _onlineCount => _onlineByChunk.values.fold(0, (a, b) => a + b);
-
-  List<String> _mentionResults = [];
-
-  DateTime? _lastSendAt;
-  int _lastSlow = 0;
-  int _lastTypingCount = 0;
 
   bool _isRecording = false;
   bool _recStarting = false;
@@ -315,42 +282,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   String? _liveMsgId;
   DateTime? _liveUntil;
 
-  DocumentReference> get _chatRef =>
-      FirebaseFirestore.instance.collection('chats').doc(widget.chatId);
-  CollectionReference> get _msgs => _chatRef.collection('messages');
+  DocumentReference> get _channelRef =>
+      FirebaseFirestore.instance.collection('channels').doc(widget.channelId);
+  CollectionReference> get _msgs => _channelRef.collection('messages');
   DocumentReference> _msgDoc(String id) => _msgs.doc(id);
-  CollectionReference> get _pinsRef => _chatRef.collection('pinned_messages');
-  DocumentReference> get _typingDoc => _chatRef.collection('typing').doc(_currentUserId);
+  CollectionReference> get _pinsRef => _channelRef.collection('pinned_messages');
 
-  String get _myRole => (_chatData?['participants_data']?[_currentUserId]?['role'] ?? 'member').toString();
-  bool get _isAdmin => _myRole == 'admin' || _myRole == 'owner';
-  bool get _isMember {
-    final p = _chatData?['participants'];
-    if (p is List) return p.map((e) => e.toString()).contains(_currentUserId);
-    return true;
-  }
-
-  bool get _isMuted {
-    final pd = _chatData?['participants_data']?[_currentUserId];
-    if (pd is Map) {
-      if (pd['is_muted'] == true) return true;
-      final mu = pd['muted_until'];
-      if (mu is Timestamp && mu.toDate().isAfter(DateTime.now())) return true;
-    }
-    return false;
-  }
-
-  int get _slowSeconds => (_chatData?['slow_mode_seconds'] as num?)?.toInt() ?? 0;
-  bool get _locked => _chatData?['is_locked'] == true;
-  bool get _canPin => _isAdmin || _chatData?['members_can_pin'] == true;
-  bool get _canForward => _isAdmin || _chatData?['restrict_forwarding'] != true;
-  String _roleOf(String uid) => (_chatData?['participants_data']?[uid]?['role'] ?? 'member').toString();
-
-  List<String> _memberIds() {
-    final p = _chatData?['participants'];
-    if (p is List) return p.map((e) => e.toString()).toList();
-    return [];
-  }
+  String get _myRole => (_channelData?['subscribers_data']?[_currentUserId]?['role'] ?? 'subscriber').toString();
+  bool get _isAdmin => _myRole == 'admin' || _myRole == 'creator';
 
   String _nameOf(String? uid) => (_userCache[uid]?[_kUserNameField] ?? 'Member').toString();
   String? _avatarOf(String? uid) {
@@ -358,54 +297,24 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     return (a is String && a.isNotEmpty) ? a : null;
   }
 
-  String _groupName() {
-    final n = _chatData?['name'];
+  String _channelName() {
+    final n = _channelData?['name'];
     if (n is String && n.trim().isNotEmpty) return n;
-    return widget.chatName;
+    return widget.channelName;
   }
 
-  String? _groupAvatar() {
-    for (final v in [_chatData?['avatar_url'], _chatData?['photo_url'], _chatData?['group_avatar'], widget.chatAvatar]) {
+  String? _channelAvatar() {
+    for (final v in [_channelData?['avatar_url'], widget.channelAvatar]) {
       if (v is String && v.isNotEmpty) return v;
     }
     return null;
   }
 
-  String? _hardBlockReason() {
-    if (_currentUserId == null) return 'Sign in to send messages';
-    if (!_isMember) return 'You are no longer a member of this chat';
-    if (_isMuted) return 'You have been muted by an admin';
-    if (_locked && !_isAdmin) return 'Only admins can send messages';
-    return null;
-  }
+  int get _subCount => (_channelData?['subscribers_count'] as num?)?.toInt() ?? 0;
 
-  int get _slowRemaining {
-    final s = _slowSeconds;
-    if (s <= 0 || _isAdmin) return 0;
-    DateTime? last = _lastSendAt;
-    for (final m in _visible) {
-      if (m['sender_id'] == _currentUserId) {
-        final ts = m['created_at'];
-        if (ts is Timestamp) {
-          final d = ts.toDate();
-          if (last == null || d.isAfter(last)) last = d;
-        }
-        break;
-      }
-    }
-    if (last == null) return 0;
-    final rem = s - DateTime.now().difference(last).inSeconds;
-    return rem > 0 ? rem : 0;
-  }
-
-  String? _blockReason() {
-    final h = _hardBlockReason();
-    if (h != null) return h;
-    final r = _slowRemaining;
-    if (r > 0) return 'Slow mode is on. Wait ${r}s';
-    return null;
-  }
-
+  // ═══════════════════════════════════════════════════════════════════════
+  // LIFECYCLE
+  // ═══════════════════════════════════════════════════════════════════════
   @override
   void initState() {
     super.initState();
@@ -426,19 +335,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       setState(() => _messagesLoaded = true);
       return;
     }
-    _listenToChat();
+    _listenToChannel();
     _listenToMessages();
     _listenToPins();
     _listenToPremium();
-    _listenToTyping();
     _loadWallpaper();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appResumed = state == AppLifecycleState.resumed;
-    if (_appResumed) _syncReceipts();
-    if (!_appResumed) _stopTyping();
   }
 
   @override
@@ -449,14 +355,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     _flashTimer?.cancel();
     _ampTimer?.cancel();
     _messageSub?.cancel();
-    _chatSub?.cancel();
-    _typingSub?.cancel();
+    _channelSub?.cancel();
     _premiumSub?.cancel();
     _pinSub?.cancel();
-    for (final s in _memberSubs) {
-      s.cancel();
-    }
-    _stopTyping();
     _stopLiveLocation(updateUi: false);
     _messageController.dispose();
     _messageFocus.dispose();
@@ -471,16 +372,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   void _onTick() {
     if (!mounted) return;
     var changed = false;
-    final r = _slowRemaining;
-    if (r != _lastSlow) {
-      _lastSlow = r;
-      changed = true;
-    }
-    final tc = _typingNames().length;
-    if (tc != _lastTypingCount) {
-      _lastTypingCount = tc;
-      changed = true;
-    }
     if (_isRecording && _recStart != null) {
       final s = DateTime.now().difference(_recStart!).inSeconds;
       if (s != _recSeconds) {
@@ -491,45 +382,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     if (changed) setState(() {});
   }
 
-  void _listenToChat() {
-    _chatSub = _chatRef.snapshots().listen((doc) {
+  // ═══════════════════════════════════════════════════════════════════════
+  // LISTENERS
+  // ═══════════════════════════════════════════════════════════════════════
+  void _listenToChannel() {
+    _channelSub = _channelRef.snapshots().listen((doc) {
       if (!mounted) return;
       setState(() {
-        if (doc.exists) _chatData = doc.data();
+        if (doc.exists) _channelData = doc.data();
       });
-      if (doc.exists) {
-        final parts = _chatData?['participants'];
-        if (parts is List) _listenToMembers(parts.map((e) => e.toString()).toList());
-      }
     }, onError: (_) {});
-  }
-
-  void _listenToMembers(List<String> ids) {
-    final key = ids.join(',');
-    if (key == _membersKey) return;
-    _membersKey = key;
-    for (final s in _memberSubs) {
-      s.cancel();
-    }
-    _memberSubs.clear();
-    _onlineByChunk.clear();
-    for (var i = 0; i < ids.length; i += 10) {
-      final chunk = ids.sublist(i, math.min(i + 10, ids.length));
-      final idx = i;
-      _memberSubs.add(FirebaseFirestore.instance
-          .collection('users')
-          .where(FieldPath.documentId, whereIn: chunk)
-          .snapshots()
-          .listen((snap) {
-        if (!mounted) return;
-        setState(() {
-          for (final d in snap.docs) {
-            _userCache[d.id] = d.data();
-          }
-          _onlineByChunk[idx] = snap.docs.where((d) => d.data()[_kUserOnlineField] == true).length;
-        });
-      }, onError: (_) {}));
-    }
   }
 
   void _listenToMessages() {
@@ -577,15 +439,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
       if (!_firstSnapshotDone && _messagesLoaded) {
         _firstSnapshotDone = true;
-        if (_unreadCount > 0 && _firstUnreadId != null) {
-          setState(() {
-            _dividerAnchorId = _firstUnreadId;
-            _dividerCount = _unreadCount;
-          });
-          WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToMessage(_dividerAnchorId));
-        }
       }
-      _syncReceipts();
     }, onError: (_) {
       if (mounted) setState(() => _messagesLoaded = true);
     });
@@ -597,22 +451,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       setState(() {
         _pins = snap.docs.map((d) => <String, dynamic>{'id': d.id, ...d.data()}).toList();
         if (_pinIndex >= _pins.length) _pinIndex = 0;
-      });
-    }, onError: (_) {});
-  }
-
-  void _listenToTyping() {
-    _typingSub = _chatRef.collection('typing').snapshots().listen((snap) {
-      if (!mounted) return;
-      setState(() {
-        _typingUsers.clear();
-        for (final doc in snap.docs) {
-          if (doc.id == _currentUserId) continue;
-          final data = doc.data();
-          if (data['is_typing'] != true) continue;
-          final at = data['at'];
-          _typingUsers[doc.id] = at is Timestamp ? at.toDate() : DateTime.now();
-        }
       });
     }, onError: (_) {});
   }
@@ -638,87 +476,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       if (doc.exists && mounted) {
         final walls = doc.data()?['chat_wallpapers'];
         if (walls is Map) {
-          final v = walls[widget.chatId];
+          final v = walls[widget.channelId];
           if (v is String && v.isNotEmpty) setState(() => _wallpaper = v);
         }
       }
     } catch (_) {}
   }
 
-  List<String> _typingNames() {
-    final now = DateTime.now();
-    return _typingUsers.entries
-        .where((e) => now.difference(e.value).inSeconds < 20)
-        .map((e) => _nameOf(e.key))
-        .toList();
-  }
-
-  bool _isTrackedIncoming(Map<String, dynamic> m) =>
-      m['sender_id'] != _currentUserId &&
-      m['type'] != 'system' &&
-      m['_pending'] != true &&
-      m['deleted_for_everyone'] != true &&
-      m.containsKey('read_by');
-
   void _refreshVisible() {
     final seen = <String>{};
     final out = >[];
-    final me = _currentUserId;
     for (final m in [..._live, ..._older]) {
       final id = m['id']?.toString();
       if (id == null || !seen.add(id)) continue;
-      if (m['deleted_for_everyone'] == true) continue;
-      final df = m['deleted_for'];
-      if (df is List && df.contains(me)) continue;
       out.add(m);
     }
     _visible = out;
-
-    var c = 0;
-    String? first;
-    for (final m in _live) {
-      if (!_isTrackedIncoming(m)) continue;
-      final rb = m['read_by'];
-      if (rb is List && !rb.contains(me)) {
-        c++;
-        first = m['id']?.toString();
-      }
-    }
-    _unreadCount = c;
-    _firstUnreadId = first;
-  }
-
-  Future<void> _syncReceipts() async {
-    final me = _currentUserId;
-    if (me == null || !_appResumed) return;
-    final batch = FirebaseFirestore.instance.batch();
-    var n = 0;
-    for (final m in _live) {
-      if (!_isTrackedIncoming(m)) continue;
-      final id = m['id'].toString();
-      final dt = m['delivered_to'];
-      final rb = m['read_by'];
-      final delivered = dt is List && dt.contains(me);
-      final read = rb is List && rb.contains(me);
-      final upd = <String, dynamic>{};
-      if (!delivered && _deliveredTried.add(id)) {
-        upd['delivered_to'] = FieldValue.arrayUnion([me]);
-      }
-      if (_atBottom && !read && _readTried.add(id)) {
-        upd['read_by'] = FieldValue.arrayUnion([me]);
-        upd['delivered_to'] = FieldValue.arrayUnion([me]);
-      }
-      if (upd.isNotEmpty) {
-        batch.update(_msgDoc(id), upd);
-        n++;
-        if (n >= 400) break;
-      }
-    }
-    if (n > 0) {
-      try {
-        await batch.commit();
-      } catch (_) {}
-    }
   }
 
   Future<void> _syncOlder(String id) async {
@@ -788,7 +561,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         _atBottom = atBottom;
         _showFab = showFab;
       });
-      if (atBottom) _syncReceipts();
     }
     if (p.pixels > p.maxScrollExtent - 300) _loadOlder();
   }
@@ -842,66 +614,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     final has = text.trim().isNotEmpty;
     final hasSel = sel.isValid && !sel.isCollapsed;
 
-    var results = <String>[];
-    if (sel.isValid && sel.isCollapsed && sel.baseOffset <= text.length && sel.baseOffset >= 0) {
-      final before = text.substring(0, sel.baseOffset);
-      final mt = RegExp(r'(?:^|\s)@([^\s@]{0,30})$').firstMatch(before);
-      if (mt != null) {
-        final q = (mt.group(1) ?? '').toLowerCase();
-        results = _memberIds().where((uid) {
-          if (uid == _currentUserId) return false;
-          final n = _nameOf(uid).toLowerCase();
-          return n != 'member' && (q.isEmpty || n.contains(q));
-        }).take(6).toList();
-      }
-    }
-
-    final sameMentions = results.length == _mentionResults.length &&
-        results.asMap().entries.every((e) => _mentionResults[e.key] == e.value);
-    if (has != _hasText || hasSel != _hasSelection || !sameMentions) {
+    if (has != _hasText || hasSel != _hasSelection) {
       setState(() {
         _hasText = has;
         _hasSelection = hasSel;
-        _mentionResults = results;
       });
     }
-  }
-
-  void _insertMention(String uid) {
-    final name = _nameOf(uid);
-    final text = _messageController.text;
-    final sel = _messageController.selection;
-    if (!sel.isValid) return;
-    final before = text.substring(0, sel.baseOffset);
-    final after = text.substring(sel.baseOffset);
-    final m = RegExp(r'@([^\s@]{0,30})$').firstMatch(before);
-    if (m == null) return;
-    final newBefore = '${before.substring(0, m.start)}@$name ';
-    _messageController.value = TextEditingValue(
-      text: newBefore + after,
-      selection: TextSelection.collapsed(offset: newBefore.length),
-    );
-  }
-
-  void _insertMentionAtEnd(String uid) {
-    final name = _nameOf(uid);
-    final t = _messageController.text;
-    final sep = (t.isEmpty || t.endsWith(' ')) ? '' : ' ';
-    final nt = '$t$sep@$name ';
-    _messageController.value = TextEditingValue(text: nt, selection: TextSelection.collapsed(offset: nt.length));
-    _messageFocus.requestFocus();
-  }
-
-  Map<String, String> _collectMentions(String text) {
-    final out = <String, String>{};
-    for (final uid in _memberIds()) {
-      if (uid == _currentUserId) continue;
-      final n = _nameOf(uid);
-      if (n.isEmpty || n == 'Member') continue;
-      final re = RegExp('@${RegExp.escape(n)}(?=\\s|\$|[.,!?;:])');
-      if (re.hasMatch(text)) out[uid] = n;
-    }
-    return out;
   }
 
   void _wrapSelection(String open, [String? close]) {
@@ -928,49 +646,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     );
   }
 
-  void _onTyping(String val) {
-    if (val.isEmpty) {
-      _stopTyping();
-      return;
-    }
-    final now = DateTime.now();
-    if (_lastTypingWrite == null || now.difference(_lastTypingWrite!).inSeconds >= 3) {
-      _lastTypingWrite = now;
-      if (_currentUserId != null) {
-        _typingDoc.set({'is_typing': true, 'at': FieldValue.serverTimestamp()}).catchError((_) {});
-      }
-    }
-    _typingTimer?.cancel();
-    _typingTimer = Timer(const Duration(seconds: 4), _stopTyping);
-  }
-
-  void _stopTyping() {
-    _typingTimer?.cancel();
-    if (_lastTypingWrite != null && _currentUserId != null) {
-      _lastTypingWrite = null;
-      _typingDoc.delete().catchError((_) {});
-    }
-  }
-
   Future<String?> _postMessage(Map<String, dynamic> data, {bool system = false}) async {
     final me = _currentUserId;
     if (me == null) return null;
-    if (!system) {
-      final reason = _blockReason();
-      if (reason != null) {
-        _showSnack(reason);
-        return null;
-      }
-      _lastSendAt = DateTime.now();
-    }
     final msgId = const Uuid().v4();
     final payload = <String, dynamic>{
       'id': msgId,
       'sender_id': me,
       'created_at': FieldValue.serverTimestamp(),
-      'is_read': false,
-      'read_by': [me],
-      'delivered_to': [me],
       ...data,
     };
     _msgs.doc(msgId).set(payload).catchError((e) {
@@ -989,35 +672,20 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       await _commitEdit(text);
       return;
     }
-    final reason = _blockReason();
-    if (reason != null) {
-      _showSnack(reason);
-      return;
-    }
-    final mentions = _collectMentions(text);
-    final replyId = _replyingTo;
-    final reply = replyId != null ? _findMessage(replyId) : null;
 
     _messageController.clear();
-    _stopTyping();
     setState(() => _replyingTo = null);
 
     await _postMessage({
       'text': text,
       'type': 'text',
       'media_type': 'text',
-      if (replyId != null) 'reply_to': replyId,
-      if (reply != null) 'reply_to_content': _stripFormatting(_previewOf(reply)),
-      if (reply != null) 'reply_to_sender': _nameOf(reply['sender_id']?.toString()),
-      if (mentions.isNotEmpty) 'mentions': mentions.keys.toList(),
-      if (mentions.isNotEmpty) 'mention_names': mentions.values.toList(),
     });
   }
 
   Future<void> _commitEdit(String text) async {
     final id = _editingId;
     if (id == null) return;
-    final mentions = _collectMentions(text);
     _messageController.clear();
     setState(() => _editingId = null);
     try {
@@ -1025,8 +693,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         'text': text,
         'edited': true,
         'edited_at': FieldValue.serverTimestamp(),
-        'mentions': mentions.keys.toList(),
-        'mention_names': mentions.values.toList(),
       });
       _syncOlder(id);
     } catch (e) {
@@ -1061,8 +727,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
     _showSnack('Uploading...');
     final url = type == 'image'
-        ? await CloudinaryService.uploadImage(file, 'luma/groups')
-        : await CloudinaryService.uploadVideo(file, 'luma/groups');
+        ? await CloudinaryService.uploadImage(file, 'luma/channels')
+        : await CloudinaryService.uploadVideo(file, 'luma/channels');
     if (url == null) {
       _showSnack('Upload failed');
       return;
@@ -1086,8 +752,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         final isVideo = a.type == AssetType.video;
         _showSnack('Uploading ${i + 1}/${assets.length}...');
         final url = isVideo
-            ? await CloudinaryService.uploadVideo(file, 'luma/groups')
-            : await CloudinaryService.uploadImage(file, 'luma/groups');
+            ? await CloudinaryService.uploadVideo(file, 'luma/channels')
+            : await CloudinaryService.uploadImage(file, 'luma/channels');
         if (url == null) {
           _showSnack('Upload failed');
           continue;
@@ -1105,11 +771,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   }
 
   Future<void> _pickFromCamera({bool closeSheet = false}) async {
-    final reason = _blockReason();
-    if (reason != null) {
-      _showSnack(reason);
-      return;
-    }
     try {
       if (closeSheet) {
         Navigator.pop(context);
@@ -1118,7 +779,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       final XFile? photo = await _picker.pickImage(source: ImageSource.camera);
       if (photo != null) {
         _showSnack('Uploading...');
-        final url = await CloudinaryService.uploadImage(File(photo.path), 'luma/groups');
+        final url = await CloudinaryService.uploadImage(File(photo.path), 'luma/channels');
         if (url != null && mounted) {
           ScaffoldMessenger.of(context).hideCurrentSnackBar();
           await _postMessage({'type': 'image', 'media_type': 'image', 'media_url': url});
@@ -1133,11 +794,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
   Future<void> _startRecording() async {
     if (_isRecording || _recStarting) return;
-    final reason = _blockReason();
-    if (reason != null) {
-      _showSnack(reason);
-      return;
-    }
     _recStarting = true;
     _recFinishEarly = false;
     try {
@@ -1371,16 +1027,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     return null;
   }
 
-  void _startReply(Map<String, dynamic> m) {
-    if (_hardBlockReason() != null) return;
-    setState(() {
-      _replyingTo = m['id'].toString();
-      _editingId = null;
-    });
-    _messageFocus.requestFocus();
-  }
-
   void _startEdit(Map<String, dynamic> m) {
+    if (!_isAdmin) return;
     final text = (m['text'] ?? '').toString();
     setState(() {
       _editingId = m['id'].toString();
@@ -1421,13 +1069,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         'pinned_by': _currentUserId,
         'preview': _stripFormatting(_previewOf(m)),
       });
-      await _postMessage({
-        'type': 'system',
-        'media_type': 'system',
-        'content': '${_nameOf(_currentUserId)} pinned a message',
-        'system_kind': 'pin',
-        'target_id': id,
-      }, system: true);
     } catch (e) {
       _showSnack('Could not pin: $e');
     }
@@ -1456,53 +1097,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     return r == true;
   }
 
-  Future<void> _deleteForMe(String id) async {
+  Future<void> _deleteMessage(String id) async {
     try {
-      await _msgDoc(id).update({'deleted_for': FieldValue.arrayUnion([_currentUserId])});
-      _syncOlder(id);
-    } catch (e) {
-      _showSnack('Delete failed: $e');
-    }
-  }
-
-  Future<void> _deleteForEveryone(String id) async {
-    try {
-      await _msgDoc(id).update({'deleted_for_everyone': true, 'text': 'Deleted'});
+      await _msgDoc(id).delete();
       if (_pins.any((p) => p['message_id'] == id)) await _unpin(id);
       _syncOlder(id);
     } catch (e) {
       _showSnack('Delete failed: $e');
-    }
-  }
-
-  Future<void> _processAiAction(String action, String text) async {
-    if (!_isMePremium) {
-      _showSnack('Upgrade to Premium to use AI tools!');
-      return;
-    }
-    showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
-    try {
-      final model = GenerativeModel(model: _kGeminiModel, apiKey: ApiConfig.geminiApiKey);
-      final prompt = action == 'summarize'
-          ? 'Summarize this chat message: "$text"'
-          : 'Translate this message to English: "$text"';
-      final response = await model.generateContent([Content.text(prompt)]);
-      if (mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
-        showDialog(
-          context: context,
-          builder: (_) => AlertDialog(
-            title: Text(action.toUpperCase()),
-            content: Text(response.text ?? 'No response'),
-            actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
-        _showSnack('AI Error: $e');
-      }
     }
   }
 
@@ -1556,10 +1157,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     if (me == null) return;
     final list = msgs.where((m) => m['type'] != 'system').toList();
     if (list.isEmpty) return;
-    if (!_canForward) {
-      _showSnack('Forwarding is restricted in this group');
-      return;
-    }
     list.sort((a, b) => _msgTime(a).compareTo(_msgTime(b)));
     final targets = await showModalBottomSheet<List<_ChatChoice>>(
       context: context,
@@ -1577,9 +1174,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
             'id': newId,
             'sender_id': me,
             'created_at': FieldValue.serverTimestamp(),
-            'is_read': false,
-            'read_by': [me],
-            'delivered_to': [me],
             ..._forwardPayload(m),
           });
         }
@@ -1711,6 +1305,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       ..showSnackBar(SnackBar(content: Text(s)));
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // BUILD
+  // ═══════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1718,7 +1315,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     final topInset = MediaQuery.of(context).padding.top + 62;
 
     return Scaffold(
-      backgroundColor: Colors.transparent, // ✅ Removed background behind it
+      backgroundColor: Colors.transparent, // ✅ Transparent background
       extendBodyBehindAppBar: true,
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(62),
@@ -1733,7 +1330,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
               children: [
                 if (_pins.isNotEmpty) _buildPinnedBar(theme, isDark),
                 Expanded(child: _buildListArea(theme, isDark)),
-                _buildBottomArea(theme, isDark),
+                if (_isAdmin) _buildBottomArea(theme, isDark),
               ],
             ),
           ),
@@ -1805,21 +1402,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     );
   }
 
-  String _subtitle() {
-    final names = _typingNames();
-    if (names.isNotEmpty) {
-      if (names.length == 1) return '${names[0]} is typing…';
-      if (names.length == 2) return '${names[0]} and ${names[1]} are typing…';
-      return '${names.length} people are typing…';
-    }
-    final p = _chatData?['participants'];
-    if (p is! List) return '';
-    final n = p.length;
-    return '$n member${n == 1 ? '' : 's'}${_onlineCount > 0 ? ', $_onlineCount online' : ''}';
-  }
-
-  void _openGroupInfo() {
-    Navigator.pushNamed(context, '/group_info', arguments: {'chatId': widget.chatId});
+  void _openChannelInfo() {
+    Navigator.pushNamed(context, '/channel_info', arguments: {'channelId': widget.channelId});
   }
 
   void _onBackPressed() {
@@ -1838,9 +1422,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   }
 
   Widget _buildHeader(ThemeData theme, bool isDark) {
-    final avatar = _groupAvatar();
-    final name = _groupName();
-    final typing = _typingNames().isNotEmpty;
+    final avatar = _channelAvatar();
+    final name = _channelName();
     return SafeArea(
       bottom: false,
       child: Padding(
@@ -1851,7 +1434,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
             const SizedBox(width: 8),
             Expanded(
               child: GestureDetector(
-                onTap: _openGroupInfo,
+                onTap: _openChannelInfo,
                 child: Container(
                   height: 46,
                   padding: const EdgeInsets.fromLTRB(4, 0, 12, 0),
@@ -1880,11 +1463,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                               style: TextStyle(color: theme.colorScheme.onSurface, fontSize: 15, fontWeight: FontWeight.w700),
                             ),
                             Text(
-                              _subtitle(),
+                              '$_subCount subscriber${_subCount == 1 ? '' : 's'}',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                color: typing ? _kAccent : theme.colorScheme.onSurface.withOpacity(0.55),
+                                color: theme.colorScheme.onSurface.withOpacity(0.55),
                                 fontSize: 12,
                               ),
                             ),
@@ -1955,7 +1538,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                 ],
               ),
             ),
-            if (_canPin)
+            if (_isAdmin)
               IconButton(
                 visualDensity: VisualDensity.compact,
                 icon: const Icon(Icons.close, size: 18),
@@ -1973,7 +1556,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     final list = _visible;
     Widget body;
     if (_currentUserId == null) {
-      body = const Center(child: Text('Please sign in again to use this chat'));
+      body = const Center(child: Text('Please sign in again to use this channel'));
     } else if (!_messagesLoaded) {
       body = const Center(child: SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 2.5)));
     } else if (list.isEmpty) {
@@ -1981,7 +1564,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           decoration: _headerDecoration(isDark, radius: 18),
-          child: const Text('No messages yet. Say hi 👋'),
+          child: const Text('No messages yet.'),
         ),
       );
     } else {
@@ -2009,63 +1592,21 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     return Stack(
       children: [
         Positioned.fill(child: body),
-        if (_unreadCount > 0 && !_atBottom)
-          Positioned(
-            top: 8,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: Material(
-                color: _kAccent,
-                shape: const StadiumBorder(),
-                elevation: 3,
-                child: InkWell(
-                  customBorder: const StadiumBorder(),
-                  onTap: () => _firstUnreadId != null ? _jumpToMessage(_firstUnreadId) : _scrollToBottom(),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Text(
-                      '$_unreadCount new message${_unreadCount == 1 ? '' : 's'}',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
         if (_showFab)
           Positioned(
             right: 12,
             bottom: 12,
             child: GestureDetector(
               onTap: _scrollToBottom,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: isDark ? const Color(0xFF1F2C34) : Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 6, offset: const Offset(0, 2))],
-                    ),
-                    child: Icon(Icons.keyboard_arrow_down, color: theme.colorScheme.onSurface, size: 28),
-                  ),
-                  if (_unreadCount > 0)
-                    Positioned(
-                      top: -6,
-                      right: -4,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(color: _kAccent, borderRadius: BorderRadius.circular(10)),
-                        child: Text(
-                          _unreadCount > 99 ? '99+' : '$_unreadCount',
-                          style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ),
-                ],
+              child: Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF1F2C34) : Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 6, offset: const Offset(0, 2))],
+                ),
+                child: Icon(Icons.keyboard_arrow_down, color: theme.colorScheme.onSurface, size: 28),
               ),
             ),
           ),
@@ -2080,14 +1621,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     final newer = i > 0 ? list[i - 1] : null;
     final t = _msgTime(m);
     final showDate = older == null || !_sameDay(t, _msgTime(older));
-    final showDivider = id == _dividerAnchorId;
     return KeyedSubtree(
       key: _keyFor(id),
       child: Column(
         children: [
           if (showDate) _dateChip(t, theme, isDark),
-          if (showDivider) _unreadDivider(),
-          _buildMessageRow(m, older, newer, showDate, showDivider, theme, isDark),
+          _buildMessageRow(m, older, newer, showDate, theme, isDark),
         ],
       ),
     );
@@ -2109,104 +1648,27 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     );
   }
 
-  Widget _unreadDivider() {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      color: _kAccent.withOpacity(0.14),
-      child: Center(
-        child: Text(
-          '$_dividerCount unread message${_dividerCount == 1 ? '' : 's'}',
-          style: const TextStyle(color: _kAccent, fontSize: 12, fontWeight: FontWeight.w700),
-        ),
-      ),
-    );
-  }
-
-  Widget _systemRow(Map<String, dynamic> m, ThemeData theme, bool isDark) {
-    final text = (m['content'] ?? m['text'] ?? '').toString();
-    final target = m['target_id']?.toString();
-    final kind = m['system_kind']?.toString();
-    return Center(
-      child: GestureDetector(
-        onTap: (kind == 'pin' && target != null) ? () => _jumpToMessage(target) : null,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 5),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xCC1F2C34) : Colors.white.withOpacity(0.85),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (kind == 'pin') const Padding(padding: EdgeInsets.only(right: 6), child: Icon(Icons.push_pin, size: 13, color: _kAccent)),
-              Flexible(
-                child: Text(
-                  text,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.75)),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _tickIcon(Map<String, dynamic> m, Color base) {
-    final me = _currentUserId;
-    if (m['_pending'] == true) return Icon(Icons.access_time, size: 13, color: base);
-    final rb = m['read_by'];
-    final dt = m['delivered_to'];
-    final readByOther = (rb is List && rb.any((e) => e != me)) || m['is_read'] == true;
-    if (readByOther) return const Icon(Icons.done_all, size: 15, color: Color(0xFF4FC3F7));
-    final deliveredToOther = dt is List && dt.any((e) => e != me);
-    if (deliveredToOther) return Icon(Icons.done_all, size: 15, color: base);
-    return Icon(Icons.done, size: 15, color: base);
-  }
-
   Widget _buildMessageRow(
     Map<String, dynamic> m,
     Map<String, dynamic>? older,
     Map<String, dynamic>? newer,
     bool showDate,
-    bool showDivider,
     ThemeData theme,
     bool isDark,
   ) {
-    if (m['type'] == 'system') return _systemRow(m, theme, isDark);
-
     final id = m['id'].toString();
-    final senderId = m['sender_id']?.toString();
-    final isMe = senderId == _currentUserId;
-    final newerSame = newer != null &&
-        newer['type'] != 'system' &&
-        newer['sender_id'] == m['sender_id'] &&
-        _sameDay(_msgTime(m), _msgTime(newer)) &&
-        newer['id'] != _dividerAnchorId;
-    final olderSame = older != null &&
-        older['type'] != 'system' &&
-        older['sender_id'] == m['sender_id'] &&
-        !showDate &&
-        !showDivider;
-    final showName = !isMe && !olderSame;
-    final showAvatar = !isMe && !newerSame;
+    final newerSame = newer != null && newer['sender_id'] == m['sender_id'] && _sameDay(_msgTime(m), _msgTime(newer));
+    final olderSame = older != null && older['sender_id'] == m['sender_id'] && !showDate;
+    final showName = !olderSame;
     final lastInGroup = !newerSame;
     final selected = _selectedIds.contains(id);
 
-    final baseColor = isMe
-        ? (isDark ? const Color(0xFF005C4B) : const Color(0xFFEFFDDE))
-        : (isDark ? const Color(0xFF1F2C34) : Colors.white);
-    var bubbleColor = baseColor;
-    if (selected) bubbleColor = Color.alphaBlend(_kAccent.withOpacity(0.3), baseColor);
-    if (_highlightId == id) bubbleColor = Color.alphaBlend(_kAccent.withOpacity(0.35), baseColor);
+    final bubbleColor = isDark ? const Color(0xFF1F2C34) : Colors.white;
+    var finalBubbleColor = bubbleColor;
+    if (selected) finalBubbleColor = Color.alphaBlend(_kAccent.withOpacity(0.3), bubbleColor);
+    if (_highlightId == id) finalBubbleColor = Color.alphaBlend(_kAccent.withOpacity(0.35), bubbleColor);
 
-    final maxW = MediaQuery.of(context).size.width * 0.78;
-    final nameColor = _colorForUid(senderId);
-    final role = senderId != null ? _roleOf(senderId) : 'member';
+    final maxW = MediaQuery.of(context).size.width * 0.85;
     final metaColor = theme.colorScheme.onSurface.withOpacity(0.5);
 
     final reactions = m['reactions'];
@@ -2215,14 +1677,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     final bubble = AnimatedContainer(
       duration: const Duration(milliseconds: 250),
       constraints: BoxConstraints(maxWidth: maxW),
-      padding: const EdgeInsets.fromLTRB(10, 7, 10, 6),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       decoration: BoxDecoration(
-        color: bubbleColor,
+        color: finalBubbleColor,
         borderRadius: BorderRadius.only(
           topLeft: const Radius.circular(16),
           topRight: const Radius.circular(16),
-          bottomLeft: Radius.circular((!isMe && lastInGroup) ? 4 : 16),
-          bottomRight: Radius.circular((isMe && lastInGroup) ? 4 : 16),
+          bottomLeft: Radius.circular(lastInGroup ? 4 : 16),
+          bottomRight: const Radius.circular(16),
         ),
         boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 2, offset: const Offset(0, 1))],
       ),
@@ -2232,50 +1694,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         children: [
           if (showName)
             Padding(
-              padding: const EdgeInsets.only(bottom: 2),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      _nameOf(senderId),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: nameColor),
-                    ),
-                  ),
-                  if (role == 'owner' || role == 'admin') ...[
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: (role == 'owner' ? const Color(0xFFE5B35C) : _kAccent).withOpacity(0.18),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        role == 'owner' ? 'owner' : 'admin',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: role == 'owner' ? const Color(0xFFB8860B) : _kAccent,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          if (m['forwarded_from'] != null)
-            Padding(
               padding: const EdgeInsets.only(bottom: 4),
               child: Text(
-                'Forwarded from ${m['forwarded_from']}',
-                style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: _kAccent, fontWeight: FontWeight.w600),
+                _channelName(),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: _kAccent),
               ),
             ),
-          if (m['reply_to'] != null) _quotedReply(m),
-          ..._contentWidgets(m, isMe, theme, isDark),
-          const SizedBox(height: 2),
+          ..._contentWidgets(m, theme, isDark),
+          const SizedBox(height: 4),
           Align(
             alignment: Alignment.centerRight,
             child: Row(
@@ -2287,7 +1713,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                     child: Text('edited', style: TextStyle(fontSize: 10, fontStyle: FontStyle.italic, color: metaColor)),
                   ),
                 Text(DateFormat('HH:mm').format(_msgTime(m)), style: TextStyle(fontSize: 10, color: metaColor)),
-                if (isMe) ...[const SizedBox(width: 3), _tickIcon(m, metaColor)],
               ],
             ),
           ),
@@ -2296,87 +1721,51 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       ),
     );
 
-    final row = Row(
-      mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        if (_multiSelectMode)
+    return Padding(
+      padding: EdgeInsets.only(bottom: lastInGroup ? 8 : 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_multiSelectMode)
+            Padding(
+              padding: const EdgeInsets.only(right: 8, top: 12),
+              child: Icon(selected ? Icons.check_circle : Icons.radio_button_unchecked,
+                  color: selected ? _kAccent : Colors.grey, size: 22),
+            ),
           Padding(
-            padding: const EdgeInsets.only(right: 6, left: 2),
-            child: Icon(selected ? Icons.check_circle : Icons.radio_button_unchecked,
-                color: selected ? _kAccent : Colors.grey, size: 22),
-          ),
-        if (!isMe)
-          SizedBox(
-            width: 32,
-            child: showAvatar
+            padding: const EdgeInsets.only(right: 8, top: 4),
+            child: showAvatar(showName)
                 ? CircleAvatar(
-                    radius: 16,
-                    backgroundColor: nameColor.withOpacity(0.25),
-                    backgroundImage: _avatarOf(senderId) != null ? CachedNetworkImageProvider(_avatarOf(senderId)!) : null,
-                    child: _avatarOf(senderId) == null
-                        ? Text(_nameOf(senderId).isNotEmpty ? _nameOf(senderId)[0].toUpperCase() : '?',
-                            style: TextStyle(color: nameColor, fontWeight: FontWeight.bold, fontSize: 13))
+                    radius: 18,
+                    backgroundColor: _kAccent.withOpacity(0.15),
+                    backgroundImage: _channelAvatar() != null ? CachedNetworkImageProvider(_channelAvatar()!) : null,
+                    child: _channelAvatar() == null
+                        ? Text(_channelName().isNotEmpty ? _channelName()[0].toUpperCase() : '?',
+                            style: const TextStyle(color: _kAccent, fontWeight: FontWeight.bold, fontSize: 14))
                         : null,
                   )
-                : null,
+                : const SizedBox(width: 36),
           ),
-        if (!isMe) const SizedBox(width: 6),
-        Flexible(
-          child: GestureDetector(
-            onTap: _multiSelectMode
-                ? () => setState(() {
-                      selected ? _selectedIds.remove(id) : _selectedIds.add(id);
-                      if (_selectedIds.isEmpty) _multiSelectMode = false;
-                    })
-                : null,
-            onDoubleTap: _multiSelectMode ? null : () => _toggleReaction(m, '❤️'),
-            onLongPress: _multiSelectMode ? null : () => _showMessageMenu(m),
-            child: bubble,
+          Flexible(
+            child: GestureDetector(
+              onTap: _multiSelectMode
+                  ? () => setState(() {
+                        selected ? _selectedIds.remove(id) : _selectedIds.add(id);
+                        if (_selectedIds.isEmpty) _multiSelectMode = false;
+                      })
+                  : null,
+              onDoubleTap: _multiSelectMode ? null : () => _toggleReaction(m, '👍'),
+              onLongPress: _multiSelectMode ? null : () => _showMessageMenu(m),
+              child: bubble,
+            ),
           ),
-        ),
-      ],
-    );
-
-    return Padding(
-      padding: EdgeInsets.only(bottom: lastInGroup ? 6 : 2),
-      child: _SwipeToReply(
-        enabled: !_multiSelectMode && _hardBlockReason() == null,
-        onReply: () => _startReply(m),
-        child: row,
+        ],
       ),
     );
   }
 
-  Widget _quotedReply(Map<String, dynamic> m) {
-    final rid = m['reply_to']?.toString();
-    final orig = _findMessage(rid);
-    final name = (m['reply_to_sender'] ?? (orig != null ? _nameOf(orig['sender_id']?.toString()) : 'Message')).toString();
-    final preview = orig != null
-        ? _stripFormatting(_previewOf(orig))
-        : _stripFormatting((m['reply_to_content'] ?? 'Message').toString());
-    final color = orig != null ? _colorForUid(orig['sender_id']?.toString()) : _kAccent;
-    return GestureDetector(
-      onTap: () => _jumpToMessage(rid),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 6),
-        padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.12),
-          border: Border(left: BorderSide(color: color, width: 3)),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700)),
-            Text(preview, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5)),
-          ],
-        ),
-      ),
-    );
-  }
+  bool showAvatar(bool showName) => showName;
 
   Widget _reactionsRow(Map<String, dynamic> m) {
     final r = m['reactions'];
@@ -2388,7 +1777,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         final mine = v.contains(me);
         chips.add(GestureDetector(
           onTap: () => _toggleReaction(m, k.toString()),
-          onLongPress: () => _showWhoReacted(m),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
@@ -2408,11 +1796,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     );
   }
 
-  List<Widget> _contentWidgets(Map<String, dynamic> m, bool isMe, ThemeData theme, bool isDark) {
+  List<Widget> _contentWidgets(Map<String, dynamic> m, ThemeData theme, bool isDark) {
     final type = (m['type'] ?? m['media_type'] ?? 'text').toString();
     final url = m['media_url']?.toString();
     final out = <Widget>[];
-    final textColor = isMe && isDark ? Colors.white : theme.colorScheme.onSurface;
+    final textColor = theme.colorScheme.onSurface;
 
     switch (type) {
       case 'image':
@@ -2422,7 +1810,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         if (url != null) out.add(_VideoBubble(key: ValueKey('vid_${m['id']}'), url: url));
         break;
       case 'audio':
-        if (url != null) out.add(_buildAudioBubble(m, isMe, theme));
+        if (url != null) out.add(_buildAudioBubble(m, theme));
         break;
       case 'sticker':
       case 'gif':
@@ -2450,20 +1838,17 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     final hideText = type == 'location' || type == 'live_location' || type == 'contact';
     final text = (m['text'] ?? '').toString();
     if (!hideText && text.isNotEmpty) {
-      final names = (m['mention_names'] is List) ? (m['mention_names'] as List).map((e) => e.toString()).toList() : <String>[];
       out.add(Padding(
-        padding: EdgeInsets.only(top: out.isEmpty ? 0 : 4),
+        padding: EdgeInsets.only(top: out.isEmpty ? 0 : 6),
         child: _RichMessageText(
           text: text,
-          style: TextStyle(color: textColor, fontSize: 15.5, height: 1.25),
-          mentionNames: names,
-          mentionColor: _kAccent,
+          style: TextStyle(color: textColor, fontSize: 16.0, height: 1.3),
           linkColor: _kAccent,
         ),
       ));
       final link = type == 'text' ? _firstUrl(text) : null;
       if (link != null) {
-        out.add(Padding(padding: const EdgeInsets.only(top: 6), child: _LinkPreviewCard(url: link)));
+        out.add(Padding(padding: const EdgeInsets.only(top: 8), child: _LinkPreviewCard(url: link)));
       }
     }
     return out;
@@ -2479,18 +1864,18 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
           children: [
             CachedNetworkImage(
               imageUrl: url,
-              width: 230,
+              width: 250,
               fit: BoxFit.cover,
               placeholder: (_, __) => Container(
-                width: 230,
-                height: 160,
+                width: 250,
+                height: 180,
                 color: Colors.black12,
                 alignment: Alignment.center,
-                child: const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
+                child: const SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 2)),
               ),
               errorWidget: (_, __, ___) => Container(
-                width: 230,
-                height: 120,
+                width: 250,
+                height: 140,
                 color: Colors.black12,
                 alignment: Alignment.center,
                 child: const Icon(Icons.broken_image, color: Colors.grey),
@@ -2522,21 +1907,21 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     return GestureDetector(
       onTap: () => _openMedia(m),
       child: SizedBox(
-        width: 230,
+        width: 250,
         child: Row(
           children: [
-            CircleAvatar(radius: 22, backgroundColor: _kAccent, child: Icon(icon, color: Colors.white)),
-            const SizedBox(width: 10),
-            Expanded(child: Text(name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14))),
+            CircleAvatar(radius: 24, backgroundColor: _kAccent, child: Icon(icon, color: Colors.white, size: 28)),
+            const SizedBox(width: 12),
+            Expanded(child: Text(name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15))),
             const SizedBox(width: 6),
-            Icon(Icons.download_rounded, size: 20, color: theme.colorScheme.onSurface.withOpacity(0.5)),
+            Icon(Icons.download_rounded, size: 22, color: theme.colorScheme.onSurface.withOpacity(0.5)),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildAudioBubble(Map<String, dynamic> m, bool isMe, ThemeData theme) {
+  Widget _buildAudioBubble(Map<String, dynamic> m, ThemeData theme) {
     final id = m['id'].toString();
     final isVoice = m['file_name'] == null;
     final wf = (m['waveform'] is List)
@@ -2555,34 +1940,34 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
           GestureDetector(
             onTap: () => _togglePlay(m),
             child: Container(
-              width: 42,
-              height: 42,
+              width: 46,
+              height: 46,
               decoration: const BoxDecoration(color: _kAccent, shape: BoxShape.circle),
-              child: Icon(playing ? Icons.pause : Icons.play_arrow, color: Colors.white),
+              child: Icon(playing ? Icons.pause : Icons.play_arrow, color: Colors.white, size: 28),
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 12),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
               if (!isVoice)
                 SizedBox(
-                  width: 150,
-                  child: Text(m['file_name'].toString(), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  width: 170,
+                  child: Text(m['file_name'].toString(), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                 ),
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTapDown: (det) => _seekAudio(m, det.localPosition.dx / 150, d),
+                onTapDown: (det) => _seekAudio(m, det.localPosition.dx / 170, d),
                 child: SizedBox(
-                  width: 150,
-                  height: 26,
+                  width: 170,
+                  height: 28,
                   child: CustomPaint(painter: _WavePainter(bars: wf, progress: prog, active: _kAccent, inactive: inactive)),
                 ),
               ),
               Text(
                 loaded ? '${_fmtDur(pos.inSeconds)} / ${_fmtDur(d.inSeconds)}' : _fmtDur(total.inSeconds),
-                style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withOpacity(0.55)),
+                style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withOpacity(0.55)),
               ),
             ],
           ),
@@ -2611,12 +1996,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     final until = (msg['live_until'] as Timestamp?)?.toDate();
     final active = isLive && msg['live_active'] == true && until != null && until.isAfter(DateTime.now());
     final pos = LatLng(lat, lng);
-    final mine = msg['sender_id'] == _currentUserId && msg['id'] == _liveMsgId;
 
     return GestureDetector(
       onTap: () => Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => _LocationViewerScreen(chatId: widget.chatId, msgId: msg['id'], lat: lat, lng: lng, live: isLive)),
+        MaterialPageRoute(builder: (_) => _LocationViewerScreen(channelId: widget.channelId, msgId: msg['id'], lat: lat, lng: lng, live: isLive)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2624,8 +2008,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: SizedBox(
-              width: 220,
-              height: 140,
+              width: 250,
+              height: 150,
               child: AbsorbPointer(
                 child: FlutterMap(
                   key: ValueKey('map_${msg['id']}_${lat}_$lng'),
@@ -2640,19 +2024,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
           ),
           const SizedBox(height: 6),
           Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(isLive ? Icons.location_searching : Icons.location_on, size: 16, color: active ? Colors.green : Colors.red),
-            const SizedBox(width: 4),
+            Icon(isLive ? Icons.location_searching : Icons.location_on, size: 18, color: active ? Colors.green : Colors.red),
+            const SizedBox(width: 6),
             Text(
               isLive ? (active ? 'Live location · until ${DateFormat('HH:mm').format(until)}' : 'Live location ended') : 'Location',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
             ),
           ]),
-          if (active && mine)
-            TextButton(
-              style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(0, 30)),
-              onPressed: () => _stopLiveLocation(),
-              child: const Text('Stop sharing', style: TextStyle(color: Colors.red)),
-            ),
         ],
       ),
     );
@@ -2669,22 +2047,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         _showSnack('Number copied');
       },
       child: SizedBox(
-        width: 220,
+        width: 250,
         child: Row(children: [
           CircleAvatar(
-            radius: 22,
+            radius: 24,
             backgroundColor: Colors.blue,
             backgroundImage: (avatar != null && avatar.isNotEmpty) ? CachedNetworkImageProvider(avatar) : null,
             child: (avatar == null || avatar.isEmpty)
-                ? Text(name.isNotEmpty ? name[0].toUpperCase() : '?', style: const TextStyle(color: Colors.white))
+                ? Text(name.isNotEmpty ? name[0].toUpperCase() : '?', style: const TextStyle(color: Colors.white, fontSize: 18))
                 : null,
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-              Text(phone, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: theme.colorScheme.onSurface.withOpacity(0.6))),
-              const Text('Luma Chat', style: TextStyle(fontSize: 11, color: _kAccent)),
+              Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              Text(phone, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 14, color: theme.colorScheme.onSurface.withOpacity(0.6))),
+              const Text('Luma Channel', style: TextStyle(fontSize: 12, color: _kAccent)),
             ]),
           ),
         ]),
@@ -2704,17 +2082,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   void _showMessageMenu(Map<String, dynamic> m) {
     if (m['type'] == 'system') return;
     HapticFeedback.selectionClick();
-    final me = _currentUserId;
     final id = m['id'].toString();
-    final isMine = m['sender_id'] == me;
     final type = (m['type'] ?? 'text').toString();
     final text = (m['text'] ?? '').toString();
     final isTextual = type == 'text' && text.isNotEmpty;
     final hasDownload = m['media_url'] != null && (type == 'image' || type == 'video' || type == 'file' || type == 'audio');
     final pinned = _pins.any((p) => p['message_id'] == id);
-    final canEdit = isMine && type == 'text' && (_isAdmin || _chatData?['members_can_edit'] != false);
-    final canDeleteAll = isMine || _isAdmin;
-    final canReply = _hardBlockReason() == null;
 
     showModalBottomSheet(
       context: context,
@@ -2763,28 +2136,21 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                     ),
                   ),
                   const Divider(height: 8),
-                  if (canReply)
-                    _menuTile(Icons.reply, 'Reply', () {
-                      close();
-                      _startReply(m);
-                    }),
                   if (isTextual)
                     _menuTile(Icons.copy, 'Copy', () {
                       close();
                       Clipboard.setData(ClipboardData(text: text));
                       _showSnack('Copied');
                     }),
-                  if (_canForward)
-                    _menuTile(Icons.forward, 'Forward', () {
-                      close();
-                      _forwardMessages([m]);
-                    }),
-                  if (_canPin)
-                    _menuTile(pinned ? Icons.push_pin_outlined : Icons.push_pin, pinned ? 'Unpin' : 'Pin', () {
-                      close();
-                      pinned ? _unpin(id) : _pinMessage(m);
-                    }),
-                  if (canEdit)
+                  _menuTile(Icons.forward, 'Forward', () {
+                    close();
+                    _forwardMessages([m]);
+                  }),
+                  _menuTile(pinned ? Icons.push_pin_outlined : Icons.push_pin, pinned ? 'Unpin' : 'Pin', () {
+                    close();
+                    pinned ? _unpin(id) : _pinMessage(m);
+                  }),
+                  if (_isAdmin && type == 'text')
                     _menuTile(Icons.edit, 'Edit', () {
                       close();
                       _startEdit(m);
@@ -2794,16 +2160,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                       close();
                       _openMedia(m);
                     }),
-                  if (_isMePremium && isTextual) ...[
-                    _menuTile(Icons.summarize, 'Summarize (AI)', () {
-                      close();
-                      _processAiAction('summarize', text);
-                    }),
-                    _menuTile(Icons.translate, 'Translate (AI)', () {
-                      close();
-                      _processAiAction('translate', text);
-                    }),
-                  ],
                   if (m['reactions'] is Map && (m['reactions'] as Map).values.any((v) => v is List && v.isNotEmpty))
                     _menuTile(Icons.emoji_emotions_outlined, 'Who reacted', () {
                       close();
@@ -2816,15 +2172,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                       _selectedIds.add(id);
                     });
                   }),
-                  _menuTile(Icons.visibility_off_outlined, 'Delete for me', () {
-                    close();
-                    _deleteForMe(id);
-                  }, color: Colors.red),
-                  if (canDeleteAll)
-                    _menuTile(Icons.delete, 'Delete for everyone', () async {
+                  if (_isAdmin)
+                    _menuTile(Icons.delete, 'Delete message', () async {
                       close();
-                      if (await _confirm('Delete message?', 'This removes it for everyone in the chat.')) {
-                        _deleteForEveryone(id);
+                      if (await _confirm('Delete message?', 'This removes it from the channel.')) {
+                        _deleteMessage(id);
                       }
                     }, color: Colors.red),
                   const SizedBox(height: 6),
@@ -2940,9 +2292,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
               mainAxisSize: MainAxisSize.min,
               children: [
                 const SizedBox(height: 6),
-                _menuTile(Icons.info_outline, 'Chat info', () {
+                _menuTile(Icons.info_outline, 'Channel info', () {
                   close();
-                  _openGroupInfo();
+                  _openChannelInfo();
                 }),
                 _menuTile(Icons.search, 'Search', () {
                   close();
@@ -2965,11 +2317,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                   close();
                   setState(() => _multiSelectMode = true);
                 }),
-                if (_isMember)
-                  _menuTile(Icons.exit_to_app, 'Leave chat', () {
-                    close();
-                    _leaveGroup();
-                  }, color: Colors.red),
                 const SizedBox(height: 6),
               ],
             ),
@@ -2983,26 +2330,18 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     final result = await Navigator.push<String>(
       context,
       MaterialPageRoute(
-        builder: (_) => _GroupSearchScreen(
+        builder: (_) => _ChannelSearchScreen(
           initialTab: tab,
           getMessages: () => _visible,
           loadOlder: _loadOlder,
           hasMore: () => !_noMoreOlder,
           nameOf: (uid) => _nameOf(uid),
           avatarOf: (uid) => _avatarOf(uid),
-          memberIds: _memberIds(),
-          roleOf: _roleOf,
-          isOnline: (uid) => _userCache[uid]?[_kUserOnlineField] == true,
-          meId: _currentUserId,
         ),
       ),
     );
     if (!mounted || result == null) return;
-    if (result.startsWith('mention:')) {
-      if (_hardBlockReason() == null) _insertMentionAtEnd(result.substring(8));
-    } else {
-      _jumpToMessage(result);
-    }
+    _jumpToMessage(result);
   }
 
   void _showPinnedList() {
@@ -3035,7 +2374,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  trailing: _canPin
+                  trailing: _isAdmin
                       ? IconButton(
                           icon: const Icon(Icons.close, size: 18),
                           onPressed: () {
@@ -3056,39 +2395,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     );
   }
 
-  Future<void> _leaveGroup() async {
-    if (_myRole == 'owner') {
-      _showSnack('Owners cannot leave. Transfer ownership in Chat info first.');
-      return;
-    }
-    final ok = await _confirm('Leave chat?', 'You will stop receiving messages from this chat.', action: 'Leave');
-    if (!ok) return;
-    final me = _currentUserId;
-    if (me == null) return;
-    try {
-      await _postMessage({
-        'type': 'system',
-        'media_type': 'system',
-        'content': '${_nameOf(me)} left',
-        'system_kind': 'leave',
-      }, system: true);
-      await _chatRef.update(<Object, Object?>{
-        'participants': FieldValue.arrayRemove([me]),
-        FieldPath(['participants_data', me]): FieldValue.delete(),
-      });
-      if (mounted) Navigator.pop(context);
-    } catch (e) {
-      _showSnack('Could not leave: $e');
-    }
-  }
-
   Future<void> _setWallpaper(String? value) async {
     final me = _currentUserId;
     if (me == null) return;
     setState(() => _wallpaper = value);
     try {
       await FirebaseFirestore.instance.collection('user_settings').doc(me).set({
-        'chat_wallpapers': {widget.chatId: value ?? FieldValue.delete()},
+        'chat_wallpapers': {widget.channelId: value ?? FieldValue.delete()},
       }, SetOptions(merge: true));
     } catch (e) {
       _showSnack('Could not save wallpaper: $e');
@@ -3190,26 +2503,24 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // BOTTOM AREA
+  // ═══════════════════════════════════════════════════════════════════════
   Widget _buildBottomArea(ThemeData theme, bool isDark) {
-    final hardBlock = _hardBlockReason();
     Widget main;
     if (_multiSelectMode) {
       main = _buildMultiSelectBar(theme, isDark);
-    } else if (hardBlock != null) {
-      main = _buildBlockedBar(hardBlock, isDark);
     } else {
       main = _buildComposer(theme, isDark);
     }
-    final showBars = !_multiSelectMode && hardBlock == null;
+    final showBars = !_multiSelectMode;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         if (showBars && _replyingTo != null) _buildReplyBar(theme, isDark),
         if (showBars && _editingId != null) _buildEditBar(theme, isDark),
-        if (showBars && _mentionResults.isNotEmpty) _buildMentionList(theme, isDark),
         if (showBars && _hasSelection) _buildFormatBar(theme, isDark),
-        if (showBars && _slowSeconds > 0 && !_isAdmin) _buildSlowBanner(theme, isDark),
         if (_liveUntil != null) _buildLiveBar(theme),
         SafeArea(
           top: false,
@@ -3232,7 +2543,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
   Widget _buildReplyBar(ThemeData theme, bool isDark) {
     final msg = _findMessage(_replyingTo);
-    final name = msg != null ? _nameOf(msg['sender_id']?.toString()) : 'Message';
     return _barShell(
       isDark,
       Row(children: [
@@ -3240,7 +2550,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         const SizedBox(width: 10),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Reply to $name', style: const TextStyle(color: _kAccent, fontSize: 12, fontWeight: FontWeight.w700)),
+            const Text('Reply to message', style: TextStyle(color: _kAccent, fontSize: 12, fontWeight: FontWeight.w700)),
             Text(msg != null ? _stripFormatting(_previewOf(msg)) : 'Message', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
           ]),
         ),
@@ -3264,37 +2574,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         ),
         IconButton(icon: const Icon(Icons.close, size: 18), onPressed: _cancelEdit),
       ]),
-    );
-  }
-
-  Widget _buildMentionList(ThemeData theme, bool isDark) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(8, 0, 8, 4),
-      constraints: const BoxConstraints(maxHeight: 220),
-      decoration: _headerDecoration(isDark, radius: 16),
-      child: ListView(
-        shrinkWrap: true,
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        children: _mentionResults.map((uid) {
-          final av = _avatarOf(uid);
-          return ListTile(
-            dense: true,
-            leading: CircleAvatar(
-              radius: 15,
-              backgroundColor: _colorForUid(uid).withOpacity(0.25),
-              backgroundImage: av != null ? CachedNetworkImageProvider(av) : null,
-              child: av == null
-                  ? Text(_nameOf(uid).isNotEmpty ? _nameOf(uid)[0].toUpperCase() : '?', style: TextStyle(color: _colorForUid(uid), fontSize: 12))
-                  : null,
-            ),
-            title: Text(_nameOf(uid)),
-            trailing: (_roleOf(uid) == 'owner' || _roleOf(uid) == 'admin')
-                ? Text(_roleOf(uid), style: const TextStyle(fontSize: 11, color: _kAccent))
-                : null,
-            onTap: () => _insertMention(uid),
-          );
-        }).toList(),
-      ),
     );
   }
 
@@ -3325,21 +2604,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     );
   }
 
-  Widget _buildSlowBanner(ThemeData theme, bool isDark) {
-    final r = _slowRemaining;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-      child: Row(children: [
-        const Icon(Icons.hourglass_bottom, size: 14, color: Colors.orange),
-        const SizedBox(width: 6),
-        Text(
-          r > 0 ? 'Slow mode: next message in ${r}s' : 'Slow mode: one message every ${_slowSeconds}s',
-          style: const TextStyle(fontSize: 12, color: Colors.orange, fontWeight: FontWeight.w600),
-        ),
-      ]),
-    );
-  }
-
   Widget _buildLiveBar(ThemeData theme) {
     return Container(
       margin: const EdgeInsets.fromLTRB(10, 0, 10, 4),
@@ -3354,22 +2618,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     );
   }
 
-  Widget _buildBlockedBar(String reason, bool isDark) {
-    return Container(
-      height: 48,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: _headerDecoration(isDark, radius: 26),
-      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Icon(Icons.lock_outline, size: 18, color: Colors.grey[500]),
-        const SizedBox(width: 8),
-        Flexible(child: Text(reason, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.grey[500], fontSize: 14))),
-      ]),
-    );
-  }
-
   Widget _buildMultiSelectBar(ThemeData theme, bool isDark) {
     final selected = _visible.where((m) => _selectedIds.contains(m['id'])).toList();
-    final canDeleteAll = selected.isNotEmpty && selected.every((m) => m['sender_id'] == _currentUserId || _isAdmin);
     return Container(
       height: 52,
       padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -3392,7 +2642,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                   final list = [...selected]..sort((a, b) => _msgTime(a).compareTo(_msgTime(b)));
                   final txt = list
                       .where((m) => (m['text'] ?? '').toString().isNotEmpty && m['type'] == 'text')
-                      .map((m) => '${_nameOf(m['sender_id']?.toString())}: ${m['text']}')
+                      .map((m) => '${_channelName()}: ${m['text']}')
                       .join('\n');
                   if (txt.isEmpty) {
                     _showSnack('Nothing to copy');
@@ -3402,11 +2652,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                   _showSnack('Copied');
                 },
         ),
-        if (_canForward)
-          IconButton(
-            icon: const Icon(Icons.forward),
-            onPressed: selected.isEmpty ? null : () => _forwardMessages(selected),
-          ),
+        IconButton(
+          icon: const Icon(Icons.forward),
+          onPressed: selected.isEmpty ? null : () => _forwardMessages(selected),
+        ),
         IconButton(
           icon: const Icon(Icons.delete, color: Colors.red),
           onPressed: selected.isEmpty
@@ -3414,16 +2663,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
               : () async {
                   final ok = await _confirm(
                     'Delete ${selected.length} message${selected.length == 1 ? '' : 's'}?',
-                    canDeleteAll ? 'They will be removed for everyone.' : 'Messages from others are removed only for you.',
+                    'They will be removed for everyone.',
                   );
                   if (!ok) return;
                   for (final m in selected) {
-                    final id = m['id'].toString();
-                    if (m['sender_id'] == _currentUserId || _isAdmin) {
-                      await _deleteForEveryone(id);
-                    } else {
-                      await _deleteForMe(id);
-                    }
+                    await _deleteMessage(m['id'].toString());
                   }
                   if (mounted) {
                     setState(() {
@@ -3481,12 +2725,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                           minLines: 1,
                           maxLines: 5,
                           textCapitalization: TextCapitalization.sentences,
-                          onChanged: _onTyping,
                           onTap: () {
                             if (_activePanel != null) setState(() => _activePanel = null);
                           },
                           decoration: InputDecoration(
-                            hintText: 'Message',
+                            hintText: 'Broadcast a message...',
                             hintStyle: TextStyle(color: Colors.grey[500], fontSize: 16),
                             border: InputBorder.none,
                             enabledBorder: InputBorder.none,
@@ -3513,7 +2756,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                           child: IconButton(
                             padding: EdgeInsets.zero,
                             icon: Icon(Icons.camera_alt_outlined, color: iconColor),
-                            onPressed: _showAttachmentSheet, // ✅ Opens custom gallery picker sheet instead of default camera
+                            onPressed: _showAttachmentSheet,
                           ),
                         ),
                     ],
@@ -3527,15 +2770,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   }
 
   Widget _buildSendButton(ThemeData theme) {
-    final slow = _slowRemaining;
     final showSend = _hasText || _editingId != null;
     Widget icon;
     if (_editingId != null) {
       icon = const Icon(Icons.check, color: Colors.white, size: 24);
     } else if (_hasText) {
-      icon = slow > 0
-          ? Text('$slow', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16))
-          : const Icon(Icons.send, color: Colors.white, size: 22);
+      icon = const Icon(Icons.send, color: Colors.white, size: 22);
     } else {
       icon = const Icon(Icons.mic, color: Colors.white, size: 24);
     }
@@ -3545,7 +2785,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: (_hasText && slow > 0) ? Colors.grey : (_recCancel ? Colors.red : _kAccent),
+        color: _recCancel ? Colors.red : _kAccent,
         shape: BoxShape.circle,
         boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 6, offset: const Offset(0, 2))],
       ),
@@ -3681,11 +2921,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   }
 
   void _showAttachmentSheet() {
-    final reason = _blockReason();
-    if (reason != null) {
-      _showSnack(reason);
-      return;
-    }
     _selectedBottomTab = 0;
     _selectedAssets.clear();
     _assetsFuture = _loadAssets(RequestType.common);
@@ -3826,7 +3061,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 
   Future<void> _uploadAndSendFile(File file, String name) async {
     _showSnack('Uploading file...');
-    final url = await CloudinaryService.uploadFile(file, 'luma/files');
+    final url = await CloudinaryService.uploadFile(file, 'luma/channels');
     if (url != null) {
       if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
       await _postMessage({'type': 'file', 'media_type': 'file', 'media_url': url, 'file_name': name});
@@ -4119,15 +3354,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 class _RichMessageText extends StatefulWidget {
   final String text;
   final TextStyle style;
-  final List<String> mentionNames;
-  final Color mentionColor;
   final Color linkColor;
 
   const _RichMessageText({
     required this.text,
     required this.style,
-    required this.mentionNames,
-    required this.mentionColor,
     required this.linkColor,
   });
 
@@ -4147,32 +3378,17 @@ class _RichMessageTextState extends State<_RichMessageText> {
     super.dispose();
   }
 
-  List<InlineSpan> _mentionSpans(String s, TextStyle base) {
-    if (widget.mentionNames.isEmpty || s.isEmpty) return [TextSpan(text: s, style: base)];
-    final names = [...widget.mentionNames]..sort((a, b) => b.length.compareTo(a.length));
-    final re = RegExp('@(${names.map(RegExp.escape).join('|')})(?=\\s|\$|[.,!?;:])');
-    final out = <InlineSpan>[];
-    var last = 0;
-    for (final m in re.allMatches(s)) {
-      if (m.start > last) out.add(TextSpan(text: s.substring(last, m.start), style: base));
-      out.add(TextSpan(text: m.group(0), style: base.copyWith(color: widget.mentionColor, fontWeight: FontWeight.w700)));
-      last = m.end;
-    }
-    if (last < s.length) out.add(TextSpan(text: s.substring(last), style: base));
-    return out;
-  }
-
   List<InlineSpan> _parse(String text, TextStyle base) {
     final spans = <InlineSpan>[];
     final re = RegExp(r'\*\*(.+?)\*\*|__(.+?)__|`(.+?)`|\|\|(.+?)\|\||(https?://[^\s]+)', dotAll: true);
     var last = 0;
     var spoilerIdx = 0;
     for (final m in re.allMatches(text)) {
-      if (m.start > last) spans.addAll(_mentionSpans(text.substring(last, m.start), base));
+      if (m.start > last) spans.add(TextSpan(text: text.substring(last, m.start), style: base));
       if (m.group(1) != null) {
-        spans.addAll(_mentionSpans(m.group(1)!, base.copyWith(fontWeight: FontWeight.w700)));
+        spans.add(TextSpan(text: m.group(1)!, style: base.copyWith(fontWeight: FontWeight.w700)));
       } else if (m.group(2) != null) {
-        spans.addAll(_mentionSpans(m.group(2)!, base.copyWith(fontStyle: FontStyle.italic)));
+        spans.add(TextSpan(text: m.group(2)!, style: base.copyWith(fontStyle: FontStyle.italic)));
       } else if (m.group(3) != null) {
         spans.add(TextSpan(
           text: m.group(3),
@@ -4209,7 +3425,7 @@ class _RichMessageTextState extends State<_RichMessageText> {
       }
       last = m.end;
     }
-    if (last < text.length) spans.addAll(_mentionSpans(text.substring(last), base));
+    if (last < text.length) spans.add(TextSpan(text: text.substring(last), style: base));
     return spans;
   }
 
@@ -4220,86 +3436,6 @@ class _RichMessageTextState extends State<_RichMessageText> {
     }
     _recs.clear();
     return Text.rich(TextSpan(children: _parse(widget.text, widget.style)));
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SWIPE TO REPLY
-// ═══════════════════════════════════════════════════════════════════════════
-class _SwipeToReply extends StatefulWidget {
-  final Widget child;
-  final VoidCallback onReply;
-  final bool enabled;
-  const _SwipeToReply({required this.child, required this.onReply, required this.enabled});
-
-  @override
-  State<_SwipeToReply> createState() => _SwipeToReplyState();
-}
-
-class _SwipeToReplyState extends State<_SwipeToReply> with SingleTickerProviderStateMixin {
-  double _dx = 0;
-  bool _fired = false;
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 200));
-  Animation<double>? _a;
-
-  @override
-  void initState() {
-    super.initState();
-    _c.addListener(() {
-      final a = _a;
-      if (a != null) setState(() => _dx = a.value);
-    });
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  void _update(DragUpdateDetails d) {
-    if (!widget.enabled) return;
-    setState(() => _dx = (_dx + d.delta.dx).clamp(-90.0, 0.0).toDouble());
-    if (!_fired && _dx <= -60) {
-      _fired = true;
-      HapticFeedback.lightImpact();
-    }
-  }
-
-  void _end(DragEndDetails d) {
-    if (_fired) widget.onReply();
-    _fired = false;
-    _a = Tween<double>(begin: _dx, end: 0).animate(CurvedAnimation(parent: _c, curve: Curves.easeOut));
-    _c.forward(from: 0);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!widget.enabled) return widget.child;
-    final p = _c01(-_dx / 60);
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onHorizontalDragUpdate: _update,
-      onHorizontalDragEnd: _end,
-      child: Stack(
-        alignment: Alignment.centerRight,
-        children: [
-          Positioned(
-            right: 10,
-            child: Opacity(
-              opacity: p,
-              child: Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(color: Colors.black.withOpacity(0.25), shape: BoxShape.circle),
-                child: const Icon(Icons.reply, size: 18, color: Colors.white),
-              ),
-            ),
-          ),
-          Transform.translate(offset: Offset(_dx, 0), child: widget.child),
-        ],
-      ),
-    );
   }
 }
 
@@ -4376,7 +3512,7 @@ class _VideoBubbleState extends State<_VideoBubble> {
       child: GestureDetector(
         onTap: _loading ? null : _start,
         child: SizedBox(
-          width: 230,
+          width: 250,
           child: (c != null && c.value.isInitialized)
               ? AspectRatio(
                   aspectRatio: c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio,
@@ -4395,7 +3531,7 @@ class _VideoBubbleState extends State<_VideoBubble> {
                   ),
                 )
               : Container(
-                  height: 150,
+                  height: 160,
                   color: Colors.black,
                   alignment: Alignment.center,
                   child: _loading
@@ -4510,7 +3646,7 @@ class _LinkPreviewCardState extends State<_LinkPreviewCard> {
         return GestureDetector(
           onTap: () => _openUrl(d.url),
           child: Container(
-            width: 230,
+            width: 250,
             padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
             decoration: BoxDecoration(
               color: _kAccent.withOpacity(0.08),
@@ -4538,8 +3674,8 @@ class _LinkPreviewCardState extends State<_LinkPreviewCard> {
                       borderRadius: BorderRadius.circular(6),
                       child: CachedNetworkImage(
                         imageUrl: d.image!,
-                        width: 214,
-                        height: 110,
+                        width: 234,
+                        height: 120,
                         fit: BoxFit.cover,
                         errorWidget: (_, __, ___) => const SizedBox.shrink(),
                       ),
@@ -4604,39 +3740,31 @@ class _WavePainter extends CustomPainter {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// IN-CHAT SEARCH
+// IN-CHANNEL SEARCH
 // ═══════════════════════════════════════════════════════════════════════════
-class _GroupSearchScreen extends StatefulWidget {
+class _ChannelSearchScreen extends StatefulWidget {
   final int initialTab;
   final List> Function() getMessages;
   final Future<bool> Function() loadOlder;
   final bool Function() hasMore;
   final String Function(String? uid) nameOf;
   final String? Function(String? uid) avatarOf;
-  final List<String> memberIds;
-  final String Function(String uid) roleOf;
-  final bool Function(String uid) isOnline;
-  final String? meId;
 
-  const _GroupSearchScreen({
+  const _ChannelSearchScreen({
     required this.initialTab,
     required this.getMessages,
     required this.loadOlder,
     required this.hasMore,
     required this.nameOf,
     required this.avatarOf,
-    required this.memberIds,
-    required this.roleOf,
-    required this.isOnline,
-    required this.meId,
   });
 
   @override
-  State<_GroupSearchScreen> createState() => _GroupSearchScreenState();
+  State<_ChannelSearchScreen> createState() => _ChannelSearchScreenState();
 }
 
-class _GroupSearchScreenState extends State<_GroupSearchScreen> with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 5, vsync: this, initialIndex: widget.initialTab.clamp(0, 4));
+class _ChannelSearchScreenState extends State<_ChannelSearchScreen> with SingleTickerProviderStateMixin {
+  late final TabController _tabs = TabController(length: 4, vsync: this, initialIndex: widget.initialTab.clamp(0, 3));
   final _ctrl = TextEditingController();
   bool _loadingMore = false;
 
@@ -4670,17 +3798,6 @@ class _GroupSearchScreenState extends State<_GroupSearchScreen> with SingleTicke
 
   Widget _hint(String t) => Center(child: Text(t, style: TextStyle(color: Colors.grey[500])));
 
-  Widget _avatar(String? uid, {double r = 18}) {
-    final a = widget.avatarOf(uid);
-    final name = widget.nameOf(uid);
-    return CircleAvatar(
-      radius: r,
-      backgroundColor: _colorForUid(uid).withOpacity(0.25),
-      backgroundImage: a != null ? CachedNetworkImageProvider(a) : null,
-      child: a == null ? Text(name.isNotEmpty ? name[0].toUpperCase() : '?', style: TextStyle(color: _colorForUid(uid))) : null,
-    );
-  }
-
   Widget _messagesTab() {
     final q = _q;
     if (q.isEmpty) return _hint('Type to search messages');
@@ -4692,9 +3809,7 @@ class _GroupSearchScreenState extends State<_GroupSearchScreen> with SingleTicke
       children: [
         if (res.isEmpty) Padding(padding: const EdgeInsets.all(24), child: _hint('No results in loaded messages')),
         ...res.map((m) => ListTile(
-              leading: _avatar(m['sender_id']?.toString()),
-              title: Text(widget.nameOf(m['sender_id']?.toString()), style: const TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: Text(_stripFormatting((m['text'] ?? '').toString()), maxLines: 2, overflow: TextOverflow.ellipsis),
+              title: Text(_stripFormatting((m['text'] ?? '').toString()), maxLines: 2, overflow: TextOverflow.ellipsis),
               trailing: Text(DateFormat('d MMM').format(_msgTime(m)), style: const TextStyle(fontSize: 12)),
               onTap: () => Navigator.pop(context, m['id'].toString()),
             )),
@@ -4756,7 +3871,7 @@ class _GroupSearchScreenState extends State<_GroupSearchScreen> with SingleTicke
         ...entries.map((e) => ListTile(
               leading: const CircleAvatar(backgroundColor: _kAccent, child: Icon(Icons.link, color: Colors.white)),
               title: Text(e.key, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: _kAccent)),
-              subtitle: Text('${widget.nameOf(e.value['sender_id']?.toString())} · ${DateFormat('d MMM').format(_msgTime(e.value))}'),
+              subtitle: Text(DateFormat('d MMM').format(_msgTime(e.value))),
               trailing: IconButton(icon: const Icon(Icons.open_in_new, size: 20), onPressed: () => _openUrl(e.key)),
               onTap: () => Navigator.pop(context, e.value['id'].toString()),
             )),
@@ -4781,48 +3896,10 @@ class _GroupSearchScreenState extends State<_GroupSearchScreen> with SingleTicke
                 child: Icon(m['type'] == 'audio' ? Icons.music_note : Icons.insert_drive_file, color: Colors.white),
               ),
               title: Text((m['file_name'] ?? 'File').toString(), maxLines: 1, overflow: TextOverflow.ellipsis),
-              subtitle: Text('${widget.nameOf(m['sender_id']?.toString())} · ${DateFormat('d MMM').format(_msgTime(m))}'),
+              subtitle: Text(DateFormat('d MMM').format(_msgTime(m))),
               onTap: () => Navigator.pop(context, m['id'].toString()),
             )),
         _loadMoreTile(),
-      ],
-    );
-  }
-
-  Widget _membersTab() {
-    final q = _q;
-    final ids = widget.memberIds.where((uid) => q.isEmpty || widget.nameOf(uid).toLowerCase().contains(q)).toList();
-    return ListView(
-      children: [
-        if (ids.isEmpty) Padding(padding: const EdgeInsets.all(32), child: _hint('No members found')),
-        ...ids.map((uid) {
-          final role = widget.roleOf(uid);
-          return ListTile(
-            leading: Stack(children: [
-              _avatar(uid),
-              if (widget.isOnline(uid))
-                Positioned(
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(color: Colors.green, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 1.5)),
-                  ),
-                ),
-            ]),
-            title: Text(uid == widget.meId ? '${widget.nameOf(uid)} (you)' : widget.nameOf(uid)),
-            subtitle: widget.isOnline(uid) ? const Text('online', style: TextStyle(color: Colors.green, fontSize: 12)) : null,
-            trailing: (role == 'owner' || role == 'admin')
-                ? Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(color: _kAccent.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
-                    child: Text(role, style: const TextStyle(color: _kAccent, fontSize: 11, fontWeight: FontWeight.w700)),
-                  )
-                : null,
-            onTap: uid == widget.meId ? null : () => Navigator.pop(context, 'mention:$uid'),
-          );
-        }),
       ],
     );
   }
@@ -4836,7 +3913,7 @@ class _GroupSearchScreenState extends State<_GroupSearchScreen> with SingleTicke
           controller: _ctrl,
           autofocus: widget.initialTab == 0,
           onChanged: (_) => setState(() {}),
-          decoration: const InputDecoration(hintText: 'Search', border: InputBorder.none, enabledBorder: InputBorder.none, focusedBorder: InputBorder.none, filled: false),
+          decoration: const InputDecoration(hintText: 'Search channel', border: InputBorder.none, enabledBorder: InputBorder.none, focusedBorder: InputBorder.none, filled: false),
         ),
         actions: [
           if (_ctrl.text.isNotEmpty)
@@ -4850,13 +3927,12 @@ class _GroupSearchScreenState extends State<_GroupSearchScreen> with SingleTicke
         ],
         bottom: TabBar(
           controller: _tabs,
-          isScrollable: true,
-          tabs: const [Tab(text: 'Messages'), Tab(text: 'Media'), Tab(text: 'Links'), Tab(text: 'Files'), Tab(text: 'Members')],
+          tabs: const [Tab(text: 'Messages'), Tab(text: 'Media'), Tab(text: 'Links'), Tab(text: 'Files')],
         ),
       ),
       body: TabBarView(
         controller: _tabs,
-        children: [_messagesTab(), _mediaTab(), _linksTab(), _filesTab(), _membersTab()],
+        children: [_messagesTab(), _mediaTab(), _linksTab(), _filesTab()],
       ),
     );
   }
@@ -5219,12 +4295,12 @@ class _LocationTabState extends State<_LocationTab> {
 }
 
 class _LocationViewerScreen extends StatefulWidget {
-  final String chatId;
+  final String channelId;
   final String msgId;
   final double lat;
   final double lng;
   final bool live;
-  const _LocationViewerScreen({required this.chatId, required this.msgId, required this.lat, required this.lng, required this.live});
+  const _LocationViewerScreen({required this.channelId, required this.msgId, required this.lat, required this.lng, required this.live});
 
   @override
   State<_LocationViewerScreen> createState() => _LocationViewerScreenState();
@@ -5238,7 +4314,7 @@ class _LocationViewerScreenState extends State<_LocationViewerScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(widget.live ? 'Live location' : 'Location')),
       body: StreamBuilder<DocumentSnapshot>>(
-        stream: FirebaseFirestore.instance.collection('chats').doc(widget.chatId).collection('messages').doc(widget.msgId).snapshots(),
+        stream: FirebaseFirestore.instance.collection('channels').doc(widget.channelId).collection('messages').doc(widget.msgId).snapshots(),
         builder: (context, snap) {
           final data = snap.data?.data();
           final lat = (data?['latitude'] as num?)?.toDouble() ?? widget.lat;
