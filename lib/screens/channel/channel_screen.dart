@@ -1,112 +1,30 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
-import 'package:open_filex/open_filex.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:photo_manager/photo_manager.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
-import 'package:video_player/video_player.dart';
 
 import '../../providers/auth_provider.dart' show LumaAuthProvider;
 import '../../services/cloudinary_service.dart';
 
-const Color kLumaGold = Color(0xFFD4A73A);
-const Color kLumaGoldSoft = Color(0xFFF2D27A);
-const Color kTelegramBlue = Color(0xFF3390EC);
+// Your Giphy API Key
+const String _kGiphyApiKey = '7tXB3cisPGymcszQX85JFOY6kp3Gz47T';
 
-// ════════════════════════════════════════════════════════════════════
-// Shared small widgets
-// ════════════════════════════════════════════════════════════════════
-class LumaStarBadge extends StatelessWidget {
-  final double size;
-  const LumaStarBadge({super.key, this.size = 14});
-  @override
-  Widget build(BuildContext context) => Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: const LinearGradient(
-              colors: [kLumaGoldSoft, kLumaGold],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight),
-          boxShadow: [
-            BoxShadow(color: kLumaGold.withOpacity(0.5), blurRadius: size * 0.6)
-          ],
-        ),
-        child:
-            Icon(Icons.star_rounded, size: size * 0.7, color: Colors.white),
-      );
-}
-
-class LumaStarRing extends StatefulWidget {
-  final Widget child;
-  final double size;
-  const LumaStarRing({super.key, required this.child, this.size = 40});
-  @override
-  State<LumaStarRing> createState() => _LumaStarRingState();
-}
-
-class _LumaStarRingState extends State<LumaStarRing>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c;
-  @override
-  void initState() {
-    super.initState();
-    _c = AnimationController(vsync: this, duration: const Duration(seconds: 3))
-      ..repeat();
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-        animation: _c,
-        builder: (_, __) => Container(
-          width: widget.size,
-          height: widget.size,
-          padding: const EdgeInsets.all(2),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: SweepGradient(
-              startAngle: _c.value * 6.283,
-              endAngle: _c.value * 6.283 + 6.283,
-              colors: const [
-                kLumaGold,
-                kLumaGoldSoft,
-                Colors.transparent,
-                kLumaGold
-              ],
-            ),
-          ),
-          child: ClipOval(child: widget.child),
-        ),
-      );
-}
-
-// ════════════════════════════════════════════════════════════════════
-// Channel Screen
-// ════════════════════════════════════════════════════════════════════
-class ChannelChatScreen extends StatefulWidget {
+class ChannelScreen extends StatefulWidget {
   final String channelId;
   final String channelName;
   final String? channelAvatar;
 
-  const ChannelChatScreen({
+  const ChannelScreen({
     super.key,
     required this.channelId,
     required this.channelName,
@@ -114,519 +32,336 @@ class ChannelChatScreen extends StatefulWidget {
   });
 
   @override
-  State<ChannelChatScreen> createState() => _ChannelChatScreenState();
+  State<ChannelScreen> createState() => _ChannelScreenState();
 }
 
-class _ChannelChatScreenState extends State<ChannelChatScreen> {
+class _ChannelScreenState extends State<ChannelScreen> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
+  final _gifSearchController = TextEditingController();
   final _picker = ImagePicker();
-
+  
+  bool _hasText = false;
+  int _activePanel = 0; // 0 = none, 1 = emoji, 2 = gifs, 3 = stickers
+  
   String? _currentUserId;
-  String? _myRole = 'subscriber'; // subscriber | admin | owner
-  bool _isMePremium = false;
-  bool _isMeStar = false;
-  String? _channelWallpaper;
-  bool _isSearching = false;
-  bool _isLoading = true;
 
-  Map<String, dynamic>? _channelData;
-  bool _signaturesEnabled = false;
-  bool _commentsEnabled = true;
-  bool _reactionsEnabled = true;
-  String _mySignature = '';
-  int _subscriberCount = 0;
-  bool _isMuted = false;
+  // GIF State
+  List<String> _gifResults = [];
+  bool _isLoadingGifs = false;
 
-  List<Map<String, dynamic>> _messages = [];
-  List<Map<String, dynamic>> _pinnedMessages = [];
-  StreamSubscription? _messageSub;
-  StreamSubscription? _channelSub;
+  // Custom Stickers State
+  List<String> _customStickers = [];
+  final List<String> _defaultStickers = [
+    'https://cdn-icons-png.flaticon.com/512/11254/11254647.png',
+    'https://cdn-icons-png.flaticon.com/512/11254/11254638.png',
+    'https://cdn-icons-png.flaticon.com/512/11254/11254642.png',
+    'https://cdn-icons-png.flaticon.com/512/11254/11254653.png',
+    'https://cdn-icons-png.flaticon.com/512/11254/11254644.png',
+    'https://cdn-icons-png.flaticon.com/512/11254/11254651.png',
+  ];
 
-  // View tracking
-  final Set<String> _viewedMessages = {};
-  final Map<String, Timer> _viewTimers = {};
-
-  String? _activePanel;
-  bool _multiSelectMode = false;
-  final Set<String> _selectedIds = {};
-
-  final Map<String, dynamic> _userCache = {};
-  final Map<String, VideoPlayerController> _videoControllers = {};
-
-  // Batched view counter — Firestore
-  final Map<String, int> _pendingViewIncrements = {};
-  Timer? _viewBatchTimer;
+  CollectionReference<Map<String, dynamic>> get _msgsRef => 
+      FirebaseFirestore.instance.collection('chats').doc(widget.channelId).collection('messages');
 
   @override
   void initState() {
     super.initState();
-    _init();
-  }
-
-  Future<void> _init() async {
+    _messageController.addListener(() {
+      final has = _messageController.text.trim().isNotEmpty;
+      if (has != _hasText) setState(() => _hasText = has);
+    });
     final auth = Provider.of<LumaAuthProvider>(context, listen: false);
     _currentUserId = auth.user?.uid ?? auth.mockUserId;
-    _mySignature = auth.displayName ?? 'Admin';
-    if (_currentUserId == null) return;
-
-    // Restore locally-cached viewed IDs to prevent re-counts
-    final prefs = await SharedPreferences.getInstance();
-    final cachedViews =
-        prefs.getStringList('channel_${widget.channelId}_viewed') ?? [];
-    _viewedMessages.addAll(cachedViews);
-
-    _loadLocalCache();
-    _listenToChannel();
-    _listenToMessages();
-    _listenToUserDoc();
-
-    // Batch view counter flush every 2s
-    _viewBatchTimer =
-        Timer.periodic(const Duration(seconds: 2), (_) => _flushViews());
+    
+    _loadCustomStickers();
   }
 
-  Future<void> _loadLocalCache() async {
-    final prefs = await SharedPreferences.getInstance();
-    final cached = prefs.getString('channel_${widget.channelId}_messages');
-    if (cached != null && mounted) {
-      final decoded = List<Map<String, dynamic>>.from(jsonDecode(cached));
-      setState(() {
-        _messages = decoded;
-        _isLoading = false;
-      });
-    }
+  @override
+  void dispose() {
+    _messageController.dispose();
+    _scrollController.dispose();
+    _gifSearchController.dispose();
+    super.dispose();
   }
 
-  Future<void> _saveLocalCache(List<Map<String, dynamic>> msgs) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-        'channel_${widget.channelId}_messages', jsonEncode(msgs));
+  // ═══════════════════════════════════════════════════════════════════════
+  // CUSTOM GALLERY
+  // ═══════════════════════════════════════════════════════════════════════
+  Future<List<AssetEntity>> _loadCustomGalleryAssets() async {
+    final ps = await PhotoManager.requestPermissionExtend();
+    if (!ps.hasAccess) throw Exception('Permission denied');
+    final paths = await PhotoManager.getAssetPathList(type: RequestType.image, onlyAll: true);
+    if (paths.isEmpty) return [];
+    return paths.first.getAssetListPaged(page: 0, size: 100);
   }
 
-  void _listenToChannel() {
-    _channelSub = FirebaseFirestore.instance
-        .collection('chats')
-        .doc(widget.channelId)
-        .snapshots()
-        .listen((doc) {
-      if (mounted && doc.exists) {
-        final data = doc.data()!;
-        setState(() {
-          _channelData = data;
-          _myRole = data['participants_data']?[_currentUserId]?['role'] ??
-              'subscriber';
-          _signaturesEnabled =
-              data['settings']?['signatures_enabled'] == true;
-          _commentsEnabled = data['settings']?['comments_enabled'] != false;
-          _reactionsEnabled =
-              data['settings']?['reactions_enabled'] != false;
-          _channelWallpaper = data['wallpaper_url'];
-          _subscriberCount = (data['participants'] as List?)?.length ?? 0;
-          _isMuted =
-              (data['muted_by'] as List?)?.contains(_currentUserId) == true;
-          _isLoading = false;
-        });
-        _loadPinnedMessages();
-      }
-    });
+  void _openCustomGallery({required bool isSticker}) {
+    setState(() => _activePanel = 0); 
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return Container(
+          height: MediaQuery.of(ctx).size.height * 0.75,
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF17212B) : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      isSticker ? 'Choose Sticker Photo' : 'Recent Media', 
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
+                    ),
+                    IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: FutureBuilder<List<AssetEntity>>(
+                  future: _loadCustomGalleryAssets(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (snapshot.hasError) {
+                      return Center(child: Text('Error: ${snapshot.error}'));
+                    }
+                    final assets = snapshot.data ?? [];
+                    if (assets.isEmpty) return const Center(child: Text('No media found'));
+                    
+                    return GridView.builder(
+                      padding: const EdgeInsets.all(4),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3, crossAxisSpacing: 4, mainAxisSpacing: 4,
+                      ),
+                      itemCount: assets.length,
+                      itemBuilder: (context, index) {
+                        final asset = assets[index];
+                        return GestureDetector(
+                          onTap: () async {
+                            Navigator.pop(ctx); 
+                            final file = await asset.file;
+                            if (file != null) {
+                              if (isSticker) {
+                                _uploadAndSendCustomSticker(file);
+                              } else {
+                                _sendStandardImage(file);
+                              }
+                            }
+                          },
+                          child: FutureBuilder<Uint8List?>(
+                            future: asset.thumbnailDataWithSize(const ThumbnailSize(200, 200)),
+                            builder: (context, thumbSnap) {
+                              if (thumbSnap.hasData) return Image.memory(thumbSnap.data!, fit: BoxFit.cover);
+                              return Container(color: Colors.grey[300]);
+                            },
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
-  void _listenToMessages() {
-    _messageSub = FirebaseFirestore.instance
-        .collection('chats')
-        .doc(widget.channelId)
-        .collection('messages')
-        .orderBy('created_at', descending: true)
-        .limit(50)
-        .snapshots()
-        .listen((snap) {
-      if (!mounted) return;
-      final loaded = snap.docs
-          .map((d) => {'id': d.id, ...d.data()})
-          .where((m) => m['deleted_for_everyone'] != true)
-          .toList();
-
-      for (var m in loaded) {
-        final sid = m['sender_id'];
-        if (sid != null && !_userCache.containsKey(sid)) _fetchUser(sid);
-      }
-
-      setState(() {
-        _messages = loaded;
-        _isLoading = false;
-      });
-      _saveLocalCache(loaded);
-    });
-  }
-
-  Future<void> _fetchUser(String uid) async {
-    final doc =
-        await FirebaseFirestore.instance.collection('users').doc(uid).get();
-    if (doc.exists && mounted) {
-      setState(() => _userCache[uid] = doc.data());
-    }
-  }
-
-  void _listenToUserDoc() {
-    FirebaseFirestore.instance
-        .collection('users')
-        .doc(_currentUserId)
-        .snapshots()
-        .listen((doc) {
-      if (mounted && doc.exists) {
-        final data = doc.data()!;
-        setState(() {
-          _isMePremium = data['is_premium'] == true;
-          _isMeStar = data['luma_star_active'] == true;
-        });
-      }
-    });
-  }
-
-  Future<void> _loadPinnedMessages() async {
-    final snap = await FirebaseFirestore.instance
-        .collection('chats')
-        .doc(widget.channelId)
-        .collection('pinned_messages')
-        .orderBy('pinned_at', descending: true)
-        .limit(1)
-        .get();
-    if (mounted) {
-      setState(() => _pinnedMessages =
-          snap.docs.map((d) => {'id': d.id, ...d.data()}).toList());
-    }
-  }
-
-  // ══════════════════════════════════════════════════════════════════
-  // VIEW COUNTING — batch + debounced
-  // ══════════════════════════════════════════════════════════════════
-  void _trackView(String msgId) {
-    if (_viewedMessages.contains(msgId)) return;
-
-    _viewTimers[msgId]?.cancel();
-    _viewTimers[msgId] = Timer(const Duration(seconds: 1), () async {
-      if (!mounted) return;
-      _viewedMessages.add(msgId);
-      _pendingViewIncrements[msgId] =
-          (_pendingViewIncrements[msgId] ?? 0) + 1;
-
-      // Persist locally so we don't recount after restart
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setStringList('channel_${widget.channelId}_viewed',
-          _viewedMessages.toList());
-    });
-  }
-
-  Future<void> _flushViews() async {
-    if (_pendingViewIncrements.isEmpty) return;
-    final batch =
-        FirebaseFirestore.instance.batch();
-    _pendingViewIncrements.forEach((msgId, inc) {
-      batch.update(
-          FirebaseFirestore.instance
-              .collection('chats')
-              .doc(widget.channelId)
-              .collection('messages')
-              .doc(msgId),
-          {'views': FieldValue.increment(inc)});
-    });
-    _pendingViewIncrements.clear();
+  // ═══════════════════════════════════════════════════════════════════════
+  // UPLOAD LOGIC
+  // ═══════════════════════════════════════════════════════════════════════
+  Future<void> _uploadAndSendCustomSticker(File image) async {
     try {
-      await batch.commit();
-    } catch (_) {}
-  }
-
-  String _formatViews(int views) {
-    if (views >= 1000000) return '${(views / 1000000).toStringAsFixed(1)}M';
-    if (views >= 1000) return '${(views / 1000).toStringAsFixed(1)}K';
-    return views.toString();
-  }
-
-  bool _isSenderStar(String? uid) {
-    if (uid == null) return false;
-    if (uid == _currentUserId) return _isMeStar;
-    return _userCache[uid]?['luma_star_active'] == true;
-  }
-
-  // ══════════════════════════════════════════════════════════════════
-  // SENDING
-  // ══════════════════════════════════════════════════════════════════
-  Future<void> _sendPost({bool silent = false, DateTime? scheduleAt}) async {
-    final text = _messageController.text.trim();
-    if (text.isEmpty) return;
-    if (!_isAdmin) {
-      _showSnack('Only admins can post');
-      return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Creating sticker...')));
+      final url = await CloudinaryService.uploadImage(image, 'luma/stickers');
+      if (url != null) {
+        await _saveCustomSticker(url);
+        await _sendMessage(type: 'sticker', mediaUrl: url);
+      } else {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Upload failed')));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
+  }
+
+  Future<void> _sendStandardImage(File image) async {
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Uploading image...')));
+      final url = await CloudinaryService.uploadImage(image, 'luma/chats');
+      if (url != null) {
+        await _sendMessage(type: 'image', mediaUrl: url);
+      } else {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Upload failed')));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // CUSTOM STICKER STORAGE
+  // ═══════════════════════════════════════════════════════════════════════
+  Future<void> _loadCustomStickers() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList('my_custom_stickers') ?? [];
+    if (mounted) setState(() => _customStickers = saved);
+  }
+
+  Future<void> _saveCustomSticker(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList('my_custom_stickers') ?? [];
+    saved.add(url);
+    await prefs.setStringList('my_custom_stickers', saved);
+    _loadCustomStickers(); 
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // GIPHY API SEARCH
+  // ═══════════════════════════════════════════════════════════════════════
+  Future<void> _searchGifs(String query) async {
+    if (query.trim().isEmpty) return;
+    setState(() => _isLoadingGifs = true);
+    try {
+      final url = Uri.parse('https://api.giphy.com/v1/gifs/search?api_key=$_kGiphyApiKey&q=${Uri.encodeComponent(query)}&limit=20&rating=g');
+      final res = await http.get(url);
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        final List gifs = data['data'];
+        setState(() {
+          _gifResults = gifs.map((g) => g['images']['fixed_height']['url'].toString()).toList();
+        });
+      }
+    } catch (e) {
+      debugPrint('Giphy error: $e');
+    } finally {
+      if (mounted) setState(() => _isLoadingGifs = false);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // SENDING LOGIC
+  // ═══════════════════════════════════════════════════════════════════════
+  Future<void> _sendMessage({String type = 'text', String? mediaUrl, String? text}) async {
+    if (_currentUserId == null) return;
+    
+    final msgId = const Uuid().v4();
+    final content = text ?? _messageController.text.trim();
+    if (type == 'text' && content.isEmpty) return;
 
     _messageController.clear();
-    final msgId = const Uuid().v4();
+    setState(() => _activePanel = 0);
 
-    await FirebaseFirestore.instance
-        .collection('chats')
-        .doc(widget.channelId)
-        .collection('messages')
-        .doc(msgId)
-        .set({
-      'id': msgId,
-      'sender_id': _currentUserId,
-      'text': text,
-      'type': 'text',
-      'media_type': 'text',
-      'created_at': scheduleAt != null
-          ? Timestamp.fromDate(scheduleAt)
-          : FieldValue.serverTimestamp(),
-      'is_silent': silent,
-      'signature': _signaturesEnabled ? _mySignature : null,
-      'signature_uid': _currentUserId,
-      'views': 0,
-      'is_read': true,
-    });
-
-    if (scheduleAt != null) {
-      _showSnack(
-          'Post scheduled for ${DateFormat('MMM d, HH:mm').format(scheduleAt)}');
-    }
-  }
-
-  Future<void> _pickAndSendMedia(String type) async {
-    if (!_isAdmin) return;
-    final x = type == 'image'
-        ? await _picker.pickImage(
-            source: ImageSource.gallery, imageQuality: 90)
-        : await _picker.pickVideo(source: ImageSource.gallery);
-    if (x == null) return;
-
-    final file = File(x.path);
-    final size = await file.length();
-    final double limitGb =
-        _isMeStar ? 10 : _isMePremium ? 5 : 0.2;
-    final limit = limitGb * 1024 * 1024 * 1024;
-    if (size > limit) {
-      _showSnack(_isMeStar
-          ? 'Max 10GB for Luma Star'
-          : _isMePremium
-              ? 'Max 5GB for Premium'
-              : 'Upgrade for larger uploads');
-      return;
-    }
-
-    _showSnack('Uploading...');
-    final url = type == 'image'
-        ? await CloudinaryService.uploadImage(file, 'luma/channels')
-        : await CloudinaryService.uploadVideo(file, 'luma/channels');
-    if (url == null) return;
-    if (mounted) ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-    final msgId = const Uuid().v4();
-    await FirebaseFirestore.instance
-        .collection('chats')
-        .doc(widget.channelId)
-        .collection('messages')
-        .doc(msgId)
-        .set({
+    final payload = {
       'id': msgId,
       'sender_id': _currentUserId,
       'type': type,
       'media_type': type,
-      'media_url': url,
+      'text': type == 'text' ? content : null,
+      'media_url': mediaUrl,
       'created_at': FieldValue.serverTimestamp(),
-      'signature': _signaturesEnabled ? _mySignature : null,
-      'signature_uid': _currentUserId,
-      'views': 0,
+      'read_by': [_currentUserId],
+    };
+
+    await _msgsRef.doc(msgId).set(payload);
+    
+    await FirebaseFirestore.instance.collection('chats').doc(widget.channelId).update({
+      'last_message': type == 'text' ? content : '📎 $type',
+      'last_message_at': FieldValue.serverTimestamp(),
     });
   }
 
-  Future<void> _downloadAndOpen(String url, String type) async {
-    showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const Center(child: CircularProgressIndicator()));
-    try {
-      final response = await http.get(Uri.parse(url));
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File(
-          '${dir.path}/channel_${DateTime.now().millisecondsSinceEpoch}.${type == 'image' ? 'jpg' : 'mp4'}');
-      await file.writeAsBytes(response.bodyBytes);
-      if (mounted) {
-        Navigator.pop(context);
-        if (type == 'image') {
-          Navigator.push(
-              context,
-              MaterialPageRoute(
-                  builder: (_) => _ImageViewerScreen(imagePath: file.path)));
-        } else {
-          await OpenFilex.open(file.path);
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        Navigator.pop(context);
-        _showSnack('Download failed: $e');
-      }
-    }
-  }
-
-  void _showSnack(String s) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
-
-  bool get _isAdmin => _myRole == 'owner' || _myRole == 'admin';
-  bool get _isOwner => _myRole == 'owner';
-
-  @override
-  void dispose() {
-    _messageSub?.cancel();
-    _channelSub?.cancel();
-    _messageController.dispose();
-    _scrollController.dispose();
-    for (final t in _viewTimers.values) {
-      t.cancel();
-    }
-    for (final v in _videoControllers.values) {
-      v.dispose();
-    }
-    _viewBatchTimer?.cancel();
-    _flushViews();
-    super.dispose();
-  }
-
-  // ══════════════════════════════════════════════════════════════════
-  // BUILD
-  // ══════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════
+  // UI BUILDERS
+  // ═══════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    if (_isLoading) {
-      return Scaffold(
-          body: Center(
-              child: CircularProgressIndicator(
-                  color: theme.colorScheme.primary)));
-    }
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
+      extendBodyBehindAppBar: true,
+      backgroundColor: isDark ? const Color(0xFF0E1621) : const Color(0xFFF0F2F5),
       appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(60),
-        child: Container(
-          color: isDark ? const Color(0xFF17212B) : const Color(0xFF527DA3),
-          child: SafeArea(
-            child: _isSearching
-                ? _buildSearchBar(theme)
-                : _buildHeader(theme),
-          ),
-        ),
+        preferredSize: const Size.fromHeight(62),
+        child: _buildHeader(isDark),
       ),
-      body: Stack(
+      body: Column(
         children: [
-          if (_channelWallpaper != null)
-            Positioned.fill(
-              child: Image.network(_channelWallpaper!,
-                  fit: BoxFit.cover,
-                  opacity: const AlwaysStoppedAnimation(0.2)),
-            ),
-          Column(
-            children: [
-              if (_pinnedMessages.isNotEmpty) _buildPinnedBanner(theme),
-              Expanded(
-                child: ListView.builder(
-                  controller: _scrollController,
-                  reverse: true,
-                  padding: const EdgeInsets.all(8),
-                  itemCount: _messages.length,
-                  itemBuilder: (context, i) =>
-                      _buildPost(_messages[i], theme, isDark),
-                ),
-              ),
-              if (_multiSelectMode) _buildMultiSelectBar(theme),
-              if (_isAdmin)
-                _buildAdminComposer(theme, isDark)
-              else
-                _buildReadOnlyFooter(theme),
-              if (_activePanel != null) _buildPanel(theme, isDark),
-            ],
-          ),
+          SizedBox(height: MediaQuery.of(context).padding.top + 62),
+          Expanded(child: _buildMessageList(isDark)),
+          if (_activePanel != 0) _buildPanel(isDark),
+          _buildBottomComposer(isDark),
         ],
       ),
     );
   }
 
-  // ── HEADER ────────────────────────────────────────────────────────
-  Widget _buildHeader(ThemeData theme) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-      child: Row(
-        children: [
-          // Circular back button (separate)
-          Material(
-            color: Colors.black12,
-            shape: const CircleBorder(),
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: () => Navigator.pop(context),
-              child: const SizedBox(
-                  width: 40,
-                  height: 40,
-                  child: Icon(Icons.arrow_back,
-                      color: Colors.white, size: 20)),
-            ),
-          ),
-          const SizedBox(width: 8),
-          // Centered pill: avatar + name + subs
-          Expanded(
-            child: GestureDetector(
-              onTap: () => Navigator.pushNamed(context, '/channel_info',
-                  arguments: {'channelId': widget.channelId}),
+  // ─── HEADER ───
+  Widget _buildHeader(bool isDark) {
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+        child: Row(
+          children: [
+            _circleButton(icon: Icons.arrow_back, onTap: () => Navigator.pop(context), isDark: isDark),
+            const SizedBox(width: 8),
+            Expanded(
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                height: 46,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
                 decoration: BoxDecoration(
-                    color: Colors.black12,
-                    borderRadius: BorderRadius.circular(22)),
+                  color: isDark ? const Color(0xFF1F2C34) : Colors.white,
+                  borderRadius: BorderRadius.circular(26),
+                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 6, offset: const Offset(0, 2))],
+                ),
                 child: Row(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
                     CircleAvatar(
-                      radius: 16,
-                      backgroundImage: widget.channelAvatar != null
-                          ? NetworkImage(widget.channelAvatar!)
-                          : null,
-                      child: widget.channelAvatar == null
-                          ? const Icon(Icons.campaign,
-                              color: Colors.white, size: 18)
+                      radius: 18,
+                      backgroundColor: Colors.blue.withOpacity(0.15),
+                      backgroundImage: widget.channelAvatar != null ? CachedNetworkImageProvider(widget.channelAvatar!) : null,
+                      child: widget.channelAvatar == null 
+                          ? const Icon(Icons.campaign, color: Colors.blue) 
                           : null,
                     ),
                     const SizedBox(width: 10),
-                    Flexible(
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Row(
-                            mainAxisSize: MainAxisSize.min,
                             children: [
                               Flexible(
-                                child: Text(widget.channelName,
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w600),
-                                    overflow: TextOverflow.ellipsis),
+                                child: Text(
+                                  widget.channelName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: isDark ? Colors.white : Colors.black),
+                                ),
                               ),
                               const SizedBox(width: 4),
-                              const Icon(Icons.verified,
-                                  color: Color(0xFF6FB9F3), size: 14),
-                              if (_isMeStar) ...[
-                                const SizedBox(width: 6),
-                                const LumaStarBadge(size: 14),
-                              ],
+                              const Icon(Icons.verified, color: Colors.blue, size: 16),
                             ],
                           ),
-                          Text('$_subscriberCount subscribers',
-                              style: const TextStyle(
-                                  color: Colors.white70, fontSize: 12)),
+                          Text(
+                            '2 subscribers',
+                            style: TextStyle(fontSize: 12, color: (isDark ? Colors.white : Colors.black).withOpacity(0.55)),
+                          ),
                         ],
                       ),
                     ),
@@ -634,927 +369,369 @@ class _ChannelChatScreenState extends State<ChannelChatScreen> {
                 ),
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          // Search icon
-          Material(
-            color: Colors.black12,
-            shape: const CircleBorder(),
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: () => setState(() => _isSearching = true),
-              child: const SizedBox(
-                  width: 40,
-                  height: 40,
-                  child: Icon(Icons.search,
-                      color: Colors.white, size: 20)),
-            ),
-          ),
-          const SizedBox(width: 6),
-          // Circular 3-dot
-          Material(
-            color: Colors.black12,
-            shape: const CircleBorder(),
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: _showMoreMenu,
-              child: const SizedBox(
-                  width: 40,
-                  height: 40,
-                  child: Icon(Icons.more_vert,
-                      color: Colors.white, size: 20)),
-            ),
-          ),
-        ],
+            const SizedBox(width: 8),
+            _circleButton(icon: Icons.search, onTap: () {}, isDark: isDark),
+            const SizedBox(width: 8),
+            _circleButton(icon: Icons.more_vert, onTap: () {}, isDark: isDark),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildSearchBar(ThemeData theme) {
-    return Row(children: [
-      Material(
-        color: Colors.black12,
+  Widget _circleButton({required IconData icon, required VoidCallback onTap, required bool isDark}) {
+    return Container(
+      width: 46,
+      height: 46,
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1F2C34) : Colors.white,
+        shape: BoxShape.circle,
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 6, offset: const Offset(0, 2))],
+      ),
+      child: Material(
+        color: Colors.transparent,
         shape: const CircleBorder(),
         child: InkWell(
           customBorder: const CircleBorder(),
-          onTap: () => setState(() => _isSearching = false),
-          child: const SizedBox(
-              width: 40,
-              height: 40,
-              child: Icon(Icons.arrow_back, color: Colors.white, size: 20)),
-        ),
-      ),
-      const SizedBox(width: 8),
-      const Expanded(
-        child: TextField(
-          autofocus: true,
-          style: TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-              hintText: 'Search posts...',
-              hintStyle: TextStyle(color: Colors.white54),
-              border: InputBorder.none),
-        ),
-      ),
-    ]);
-  }
-
-  // ── READ-ONLY FOOTER for subscribers ──────────────────────────────
-  Widget _buildReadOnlyFooter(ThemeData theme) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      color: theme.scaffoldBackgroundColor,
-      child: SafeArea(
-        top: false,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.campaign_outlined,
-                size: 16,
-                color: theme.colorScheme.onSurface.withOpacity(0.4)),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                _commentsEnabled
-                    ? 'Broadcast channel • Comment on posts only'
-                    : 'Broadcast channel • Read only',
-                style: TextStyle(
-                    color: theme.colorScheme.onSurface.withOpacity(0.4),
-                    fontSize: 12.5),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
+          onTap: onTap,
+          child: Icon(icon, size: 22, color: isDark ? Colors.white : Colors.black),
         ),
       ),
     );
   }
 
-  // ── ADMIN COMPOSER ────────────────────────────────────────────────
-  Widget _buildAdminComposer(ThemeData theme, bool isDark) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
-      color: isDark ? const Color(0xFF17212B) : const Color(0xFFF0F0F0),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (_signaturesEnabled)
-              Padding(
-                padding: const EdgeInsets.only(left: 12, bottom: 6),
-                child: Row(children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                        color: kTelegramBlue.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12)),
-                    child: Text('Posting as $_mySignature',
-                        style: const TextStyle(
-                            color: kTelegramBlue,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold)),
-                  ),
-                  if (_isMeStar) ...[
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: kLumaGold.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                            color: kLumaGold.withOpacity(0.4)),
-                      ),
-                      child: const Row(children: [
-                        Icon(Icons.star_rounded,
-                            color: kLumaGold, size: 12),
-                        SizedBox(width: 4),
-                        Text('Star',
-                            style: TextStyle(
-                                color: kLumaGold,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.4)),
-                      ]),
-                    ),
-                  ],
-                ]),
-              ),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                IconButton(
-                  icon: Icon(
-                      _activePanel == 'emoji'
-                          ? Icons.keyboard
-                          : Icons.emoji_emotions_outlined,
-                      color: theme.colorScheme.onSurface.withOpacity(0.6)),
-                  onPressed: () {
-                    if (_activePanel == 'emoji') {
-                      setState(() => _activePanel = null);
-                      SystemChannels.textInput
-                          .invokeMethod('TextInput.show');
-                    } else {
-                      FocusScope.of(context).unfocus();
-                      setState(() => _activePanel = 'emoji');
-                    }
-                  },
-                ),
-                Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(
-                        color: isDark
-                            ? const Color(0xFF242F3D)
-                            : Colors.white,
-                        borderRadius: BorderRadius.circular(24)),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _messageController,
-                            minLines: 1,
-                            maxLines: null,
-                            decoration: const InputDecoration(
-                                hintText: 'Broadcast a message...',
-                                border: InputBorder.none,
-                                contentPadding: EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 12)),
-                            onTap: () {
-                              if (_activePanel != null) {
-                                setState(() => _activePanel = null);
-                              }
-                            },
-                          ),
+  // ─── MESSAGE LIST ───
+  Widget _buildMessageList(bool isDark) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _msgsRef.orderBy('created_at', descending: true).limit(100).snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        
+        final docs = snapshot.data!.docs;
+        if (docs.isEmpty) return const Center(child: Text('No messages yet'));
+
+        return ListView.builder(
+          controller: _scrollController,
+          reverse: true,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+          itemCount: docs.length,
+          itemBuilder: (context, i) {
+            final data = docs[i].data();
+            final isMe = data['sender_id'] == _currentUserId;
+            final type = data['type'] ?? 'text';
+            final text = data['text'] ?? '';
+            final mediaUrl = data['media_url'];
+            final time = data['created_at'] is Timestamp 
+                ? DateFormat('HH:mm').format((data['created_at'] as Timestamp).toDate()) 
+                : '';
+
+            return Align(
+              alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: type == 'sticker' || type == 'gif' || type == 'image'
+                    ? EdgeInsets.zero 
+                    : const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: type == 'sticker' || type == 'gif' 
+                    ? null 
+                    : BoxDecoration(
+                        // Gold tint for channel broadcast messages
+                        color: isMe 
+                            ? const Color(0xFFFFF9E6)
+                            : (isDark ? const Color(0xFF1F2C34) : Colors.white),
+                        borderRadius: BorderRadius.only(
+                          topLeft: const Radius.circular(16),
+                          topRight: const Radius.circular(16),
+                          bottomLeft: Radius.circular(isMe ? 16 : 4),
+                          bottomRight: Radius.circular(isMe ? 4 : 16),
                         ),
-                        IconButton(
-                            icon: Icon(Icons.attach_file,
-                                color: theme.colorScheme.onSurface
-                                    .withOpacity(0.6)),
-                            onPressed: _showAttachmentSheet),
-                        IconButton(
-                            icon: Icon(Icons.camera_alt_outlined,
-                                color: theme.colorScheme.onSurface
-                                    .withOpacity(0.6)),
-                            onPressed: () => _pickAndSendMedia('image')),
+                        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 2, offset: const Offset(0, 1))],
+                      ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (type == 'text')
+                      Text(text, style: const TextStyle(color: Colors.black87, fontSize: 15)),
+                    if (type == 'sticker' && mediaUrl != null)
+                      CachedNetworkImage(imageUrl: mediaUrl, width: 140, fit: BoxFit.contain),
+                    if (type == 'gif' && mediaUrl != null)
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: CachedNetworkImage(imageUrl: mediaUrl, width: 220, fit: BoxFit.cover),
+                      ),
+                    if (type == 'image' && mediaUrl != null)
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: CachedNetworkImage(imageUrl: mediaUrl, width: 220, fit: BoxFit.cover),
+                      ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(time, style: TextStyle(fontSize: 10, color: isDark ? Colors.white54 : Colors.grey)),
+                        if (isMe) ...[
+                          const SizedBox(width: 4),
+                          const Icon(Icons.done_all, size: 14, color: Colors.blue),
+                        ]
                       ],
                     ),
-                  ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                GestureDetector(
-                  onTap: () => _sendPost(),
-                  onLongPress: _showSendOptions,
-                  child: CircleAvatar(
-                    radius: 24,
-                    backgroundColor:
-                        _isMeStar ? kLumaGold : kTelegramBlue,
-                    child: const Icon(Icons.send,
-                        color: Colors.white, size: 22),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
-  void _showSendOptions() {
-    showModalBottomSheet(
-        context: context,
-        builder: (_) => SafeArea(
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                ListTile(
-                    leading: const Icon(Icons.notifications_off),
-                    title: const Text('Send Silently'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _sendPost(silent: true);
-                    }),
-                ListTile(
-                    leading: const Icon(Icons.schedule),
-                    title: const Text('Schedule Post'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _showScheduleDialog();
-                    }),
-              ]),
-            ));
-  }
-
-  void _showScheduleDialog() async {
-    final date = await showDatePicker(
-        context: context,
-        firstDate: DateTime.now(),
-        lastDate: DateTime.now().add(const Duration(days: 30)));
-    if (date == null) return;
-    final time = await showTimePicker(
-        context: context, initialTime: TimeOfDay.now());
-    if (time == null) return;
-    final dt = DateTime(
-        date.year, date.month, date.day, time.hour, time.minute);
-    _sendPost(scheduleAt: dt);
-  }
-
-  Widget _buildPanel(ThemeData theme, bool isDark) {
-    if (_activePanel == 'emoji') {
+  // ─── PANELS (Emoji, GIFs, Stickers) ───
+  Widget _buildPanel(bool isDark) {
+    if (_activePanel == 1) {
       return SizedBox(
-          height: 300,
-          child: EmojiPicker(
-              onEmojiSelected: (category, emoji) =>
-                  _messageController.text += emoji.emoji,
-              config: Config(
-                  height: 300,
-                  emojiViewConfig: EmojiViewConfig(
-                      backgroundColor: isDark
-                          ? const Color(0xFF17212B)
-                          : Colors.white,
-                      columns: 8,
-                      emojiSizeMax: 28))));
+        height: 300,
+        child: EmojiPicker(
+          onEmojiSelected: (category, emoji) {
+            _messageController.text += emoji.emoji;
+            _messageController.selection = TextSelection.fromPosition(TextPosition(offset: _messageController.text.length));
+          },
+          config: Config(
+            height: 300,
+            emojiViewConfig: EmojiViewConfig(backgroundColor: isDark ? const Color(0xFF17212B) : Colors.white),
+            bottomActionBarConfig: BottomActionBarConfig(backgroundColor: isDark ? const Color(0xFF17212B) : Colors.white),
+          ),
+        ),
+      );
+    } 
+    else if (_activePanel == 2) {
+      return Container(
+        height: 300,
+        color: isDark ? const Color(0xFF17212B) : Colors.white,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: TextField(
+                controller: _gifSearchController,
+                decoration: InputDecoration(
+                  hintText: 'Search GIPHY...',
+                  prefixIcon: const Icon(Icons.search),
+                  filled: true,
+                  fillColor: isDark ? const Color(0xFF1F2C34) : Colors.grey[200],
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(20), borderSide: BorderSide.none),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+                onSubmitted: _searchGifs,
+              ),
+            ),
+            Expanded(
+              child: _isLoadingGifs 
+                  ? const Center(child: CircularProgressIndicator())
+                  : _gifResults.isEmpty 
+                      ? const Center(child: Text('Search for a GIF'))
+                      : GridView.builder(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, crossAxisSpacing: 8, mainAxisSpacing: 8),
+                          itemCount: _gifResults.length,
+                          itemBuilder: (context, index) {
+                            return GestureDetector(
+                              onTap: () => _sendMessage(type: 'gif', mediaUrl: _gifResults[index]),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: CachedNetworkImage(imageUrl: _gifResults[index], fit: BoxFit.cover),
+                              ),
+                            );
+                          },
+                        ),
+            ),
+          ],
+        ),
+      );
+    } 
+    else if (_activePanel == 3) {
+      return Container(
+        height: 300,
+        color: isDark ? const Color(0xFF17212B) : Colors.white,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _openCustomGallery(isSticker: true),
+                      icon: const Icon(Icons.photo_library, size: 18),
+                      label: const Text('Gallery Sticker'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _openCustomGallery(isSticker: true),
+                      icon: const Icon(Icons.camera_alt, size: 18),
+                      label: const Text('Camera Sticker'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: GridView.builder(
+                padding: const EdgeInsets.all(8),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, crossAxisSpacing: 8, mainAxisSpacing: 8),
+                itemCount: _customStickers.length + _defaultStickers.length,
+                itemBuilder: (context, index) {
+                  if (index < _customStickers.length) {
+                    return GestureDetector(
+                      onTap: () => _sendMessage(type: 'sticker', mediaUrl: _customStickers[index]),
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: CachedNetworkImage(imageUrl: _customStickers[index], fit: BoxFit.contain),
+                          ),
+                          Positioned(
+                            right: 0,
+                            top: 0,
+                            child: GestureDetector(
+                              onTap: () async {
+                                final prefs = await SharedPreferences.getInstance();
+                                final saved = prefs.getStringList('my_custom_stickers') ?? [];
+                                saved.removeAt(index);
+                                await prefs.setStringList('my_custom_stickers', saved);
+                                _loadCustomStickers();
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.all(2),
+                                decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                                child: const Icon(Icons.close, size: 12, color: Colors.white),
+                              ),
+                            ),
+                          )
+                        ],
+                      ),
+                    );
+                  }
+                  final defaultIndex = index - _customStickers.length;
+                  return GestureDetector(
+                    onTap: () => _sendMessage(type: 'sticker', mediaUrl: _defaultStickers[defaultIndex]),
+                    child: CachedNetworkImage(imageUrl: _defaultStickers[defaultIndex], fit: BoxFit.contain),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      );
     }
     return const SizedBox.shrink();
   }
 
-  void _showAttachmentSheet() {
-    showModalBottomSheet(
-        context: context,
-        builder: (_) => SafeArea(
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                ListTile(
-                    leading: const Icon(Icons.image),
-                    title: const Text('Photo'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _pickAndSendMedia('image');
-                    }),
-                ListTile(
-                    leading: const Icon(Icons.videocam),
-                    title: const Text('Video'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _pickAndSendMedia('video');
-                    }),
-              ]),
-            ));
-  }
-
-  // ── PINNED BANNER ─────────────────────────────────────────────────
-  Widget _buildPinnedBanner(ThemeData theme) {
-    final p = _pinnedMessages.first;
-    final msg = _messages.firstWhere((m) => m['id'] == p['message_id'],
-        orElse: () => {});
-    return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        color: kTelegramBlue.withOpacity(0.1),
-        child: Row(children: [
-          const Icon(Icons.push_pin, size: 16, color: kTelegramBlue),
-          const SizedBox(width: 8),
-          Expanded(
-              child: Text((msg['text'] ?? 'Pinned').toString(),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13))),
-          if (_isAdmin)
-            IconButton(
-                icon: const Icon(Icons.close, size: 16),
-                onPressed: () async {
-                  await FirebaseFirestore.instance
-                      .collection('chats')
-                      .doc(widget.channelId)
-                      .collection('pinned_messages')
-                      .doc(p['id'])
-                      .delete();
-                  _loadPinnedMessages();
-                }),
-        ]));
-  }
-
-  // ── POST BUBBLE ───────────────────────────────────────────────────
-  Widget _buildPost(
-      Map<String, dynamic> msg, ThemeData theme, bool isDark) {
-    final isSelected = _selectedIds.contains(msg['id']);
-    final isStarPost = _isSenderStar(msg['sender_id'] as String?);
-    _trackView(msg['id']);
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: GestureDetector(
-        onLongPress: () => _showMessageMenu(msg),
-        onTap: _multiSelectMode
-            ? () => setState(() {
-                  isSelected
-                      ? _selectedIds.remove(msg['id'])
-                      : _selectedIds.add(msg['id']);
-                })
-            : null,
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: isSelected
-                ? kTelegramBlue.withOpacity(0.3)
-                : (isDark ? const Color(0xFF1F2C34) : Colors.white),
-            borderRadius: BorderRadius.circular(16),
-            border: Border(
-                left: BorderSide(
-                    color: isStarPost ? kLumaGold : kTelegramBlue,
-                    width: isStarPost ? 5 : 4)),
-            boxShadow: isStarPost
-                ? [
-                    BoxShadow(
-                        color: kLumaGold.withOpacity(0.12),
-                        blurRadius: 10,
-                        offset: const Offset(0, 2)),
-                  ]
-                : null,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (msg['signature'] != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(children: [
-                    if (isStarPost) ...[
-                      const LumaStarBadge(size: 12),
-                      const SizedBox(width: 6),
-                    ],
-                    Flexible(
-                      child: Text(msg['signature'],
-                          style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: isStarPost
-                                  ? kLumaGold
-                                  : kTelegramBlue)),
+  // ─── CHANNEL BROADCAST COMPOSER ───
+  Widget _buildBottomComposer(bool isDark) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            // THE PILL INPUT FIELD
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF1F2C34) : Colors.white,
+                  borderRadius: BorderRadius.circular(26),
+                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 6, offset: const Offset(0, 2))],
+                ),
+                child: Row(
+                  children: [
+                    // EMOJI TOGGLE
+                    IconButton(
+                      icon: Icon(
+                        _activePanel == 1 ? Icons.keyboard : Icons.emoji_emotions_outlined, 
+                        color: Colors.grey
+                      ),
+                      onPressed: () {
+                        FocusScope.of(context).unfocus();
+                        setState(() => _activePanel = _activePanel == 1 ? 0 : 1);
+                      },
                     ),
-                  ]),
+                    // TEXT FIELD
+                    Expanded(
+                      child: TextField(
+                        controller: _messageController,
+                        focusNode: FocusNode()..addListener(() {
+                          if (_activePanel != 0) setState(() => _activePanel = 0);
+                        }),
+                        decoration: const InputDecoration(
+                          hintText: 'Broadcast a mess...',
+                          hintStyle: TextStyle(color: Colors.grey),
+                          border: InputBorder.none,
+                          isDense: true,
+                        ),
+                        maxLines: null,
+                      ),
+                    ),
+                    // STICKER TOGGLE
+                    IconButton(
+                      icon: const Icon(Icons.emoji_emotions, color: Colors.grey),
+                      onPressed: () {
+                        FocusScope.of(context).unfocus();
+                        setState(() => _activePanel = _activePanel == 3 ? 0 : 3);
+                      },
+                    ),
+                    // GIF TOGGLE
+                    IconButton(
+                      icon: const Icon(Icons.gif_box_outlined, color: Colors.grey),
+                      onPressed: () {
+                        FocusScope.of(context).unfocus();
+                        setState(() => _activePanel = _activePanel == 2 ? 0 : 2);
+                      },
+                    ),
+                    // ATTACHMENT
+                    IconButton(
+                      icon: const Icon(Icons.attach_file, color: Colors.grey),
+                      onPressed: () {
+                        _openCustomGallery(isSticker: false);
+                      },
+                    ),
+                    // CAMERA ICON (Opens Custom Gallery)
+                    IconButton(
+                      icon: const Icon(Icons.camera_alt_outlined, color: Colors.grey),
+                      onPressed: () {
+                        _openCustomGallery(isSticker: false);
+                      },
+                    ),
+                    const SizedBox(width: 4),
+                  ],
                 ),
-              if (msg['media_type'] == 'image' && msg['media_url'] != null)
-                GestureDetector(
-                    onTap: () =>
-                        _downloadAndOpen(msg['media_url'], 'image'),
-                    child: Stack(alignment: Alignment.center, children: [
-                      ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: CachedNetworkImage(
-                              imageUrl: msg['media_url'],
-                              width: double.infinity,
-                              fit: BoxFit.cover)),
-                      Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: const BoxDecoration(
-                              color: Colors.black54, shape: BoxShape.circle),
-                          child: const Icon(Icons.download,
-                              color: Colors.white)),
-                    ])),
-              if (msg['media_type'] == 'video' && msg['media_url'] != null)
-                _buildVideoBubble(msg['media_url']),
-              if ((msg['text'] ?? '').toString().isNotEmpty)
-                Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Text(msg['text'],
-                        style: TextStyle(
-                            color: theme.colorScheme.onSurface,
-                            fontSize: 15))),
-              const SizedBox(height: 8),
-              Row(children: [
-                Icon(Icons.remove_red_eye,
-                    size: 14,
-                    color: isStarPost ? kLumaGold : Colors.grey),
-                const SizedBox(width: 4),
-                Text(_formatViews((msg['views'] ?? 0) as int),
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: isStarPost
-                            ? kLumaGold.withOpacity(0.85)
-                            : Colors.grey)),
-                const Spacer(),
-                if (_commentsEnabled)
-                  GestureDetector(
-                    onTap: () => Navigator.pushNamed(context, '/comments',
-                        arguments: {'postId': msg['id']}),
-                    child: Row(children: [
-                      const Icon(Icons.comment,
-                          size: 16, color: kTelegramBlue),
-                      const SizedBox(width: 4),
-                      Text('${msg['comments_count'] ?? 0}',
-                          style: const TextStyle(
-                              fontSize: 12, color: kTelegramBlue))
-                    ]),
-                  ),
-                const SizedBox(width: 12),
-                Text(
-                    DateFormat('HH:mm').format(
-                        (msg['created_at'] as Timestamp?)?.toDate() ??
-                            DateTime.now()),
-                    style:
-                        const TextStyle(fontSize: 11, color: Colors.grey)),
-              ]),
-              // Reactions row (only if channel enables it and any exist)
-              if (_reactionsEnabled &&
-                  msg['reactions'] is Map &&
-                  (msg['reactions'] as Map).isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: _buildReactionsRow(msg),
+              ),
+            ),
+            
+            const SizedBox(width: 8),
+            
+            // GOLD SEND BUTTON (Channels do not have a mic button)
+            GestureDetector(
+              onTap: () {
+                if (_hasText) {
+                  _sendMessage();
+                }
+              },
+              child: Container(
+                width: 48,
+                height: 48,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFC9A027), // Gold
+                  shape: BoxShape.circle,
                 ),
-            ],
-          ),
+                child: const Icon(Icons.send, color: Colors.white, size: 24),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
-
-  Widget _buildReactionsRow(Map<String, dynamic> msg) {
-    final reactions = (msg['reactions'] as Map).cast<String, dynamic>();
-    return Wrap(
-        spacing: 6,
-        children: reactions.entries.map((e) {
-          final emoji = e.key;
-          final users = (e.value is List) ? (e.value as List) : [];
-          final mine = users.contains(_currentUserId);
-          return GestureDetector(
-            onTap: () => _toggleReaction(msg['id'], emoji),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                  color: mine
-                      ? kTelegramBlue.withOpacity(0.15)
-                      : Colors.black.withOpacity(0.06),
-                  borderRadius: BorderRadius.circular(12),
-                  border: mine
-                      ? Border.all(
-                          color: kTelegramBlue.withOpacity(0.4))
-                      : null),
-              child: Text('$emoji ${users.length}',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: mine ? kTelegramBlue : Colors.grey[700])),
-            ),
-          );
-        }).toList());
-  }
-
-  Future<void> _toggleReaction(String msgId, String emoji) async {
-    final ref = FirebaseFirestore.instance
-        .collection('chats')
-        .doc(widget.channelId)
-        .collection('messages')
-        .doc(msgId);
-    final snap = await ref.get();
-    final reactions =
-        (snap.data()?['reactions'] as Map?)?.cast<String, dynamic>() ?? {};
-    final list = ((reactions[emoji] as List?) ?? []).toList();
-    if (list.contains(_currentUserId)) {
-      list.remove(_currentUserId);
-    } else {
-      list.add(_currentUserId);
-    }
-    if (list.isEmpty) {
-      reactions.remove(emoji);
-    } else {
-      reactions[emoji] = list;
-    }
-    await ref.update({'reactions': reactions});
-  }
-
-  Widget _buildVideoBubble(String url) {
-    final controller = _videoControllers.putIfAbsent(url, () {
-      final c = VideoPlayerController.networkUrl(Uri.parse(url));
-      c.initialize().then((_) => setState(() {}));
-      return c;
-    });
-    return GestureDetector(
-        onTap: () {
-          if (controller.value.isPlaying) {
-            controller.pause();
-          } else {
-            controller.play();
-          }
-          setState(() {});
-        },
-        child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-                height: 200,
-                color: Colors.black,
-                child: controller.value.isInitialized
-                    ? Stack(alignment: Alignment.center, children: [
-                        VideoPlayer(controller),
-                        Icon(
-                            controller.value.isPlaying
-                                ? Icons.pause
-                                : Icons.play_arrow,
-                            color: Colors.white,
-                            size: 40)
-                      ])
-                    : const Center(child: CircularProgressIndicator()))));
-  }
-
-  void _showMessageMenu(Map<String, dynamic> msg) {
-    final isStarPost = _isSenderStar(msg['sender_id'] as String?);
-    showModalBottomSheet(
-        context: context,
-        builder: (_) => SafeArea(
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                if (isStarPost)
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 8),
-                    color: kLumaGold.withOpacity(0.08),
-                    child: const Row(children: [
-                      LumaStarBadge(size: 14),
-                      SizedBox(width: 8),
-                      Text('Star post',
-                          style: TextStyle(
-                              color: kLumaGold,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.5)),
-                    ]),
-                  ),
-                ListTile(
-                    leading: const Icon(Icons.copy),
-                    title: const Text('Copy'),
-                    onTap: () {
-                      Clipboard.setData(
-                          ClipboardData(text: msg['text'] ?? ''));
-                      Navigator.pop(context);
-                    }),
-                if (_reactionsEnabled)
-                  ListTile(
-                      leading: const Icon(Icons.emoji_emotions_outlined),
-                      title: const Text('React'),
-                      onTap: () {
-                        Navigator.pop(context);
-                        _showReactionPicker(msg['id']);
-                      }),
-                if (_isAdmin) ...[
-                  ListTile(
-                      leading: const Icon(Icons.push_pin),
-                      title: const Text('Pin'),
-                      onTap: () async {
-                        Navigator.pop(context);
-                        await FirebaseFirestore.instance
-                            .collection('chats')
-                            .doc(widget.channelId)
-                            .collection('pinned_messages')
-                            .doc(msg['id'])
-                            .set({
-                          'message_id': msg['id'],
-                          'pinned_at': FieldValue.serverTimestamp()
-                        });
-                        _loadPinnedMessages();
-                      }),
-                  ListTile(
-                      leading:
-                          const Icon(Icons.delete, color: Colors.red),
-                      title: const Text('Delete',
-                          style: TextStyle(color: Colors.red)),
-                      onTap: () async {
-                        Navigator.pop(context);
-                        await FirebaseFirestore.instance
-                            .collection('chats')
-                            .doc(widget.channelId)
-                            .collection('messages')
-                            .doc(msg['id'])
-                            .update(
-                                {'deleted_for_everyone': true, 'text': 'Deleted'});
-                      }),
-                ],
-                ListTile(
-                    leading: const Icon(Icons.select_all),
-                    title: const Text('Select'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      setState(() {
-                        _multiSelectMode = true;
-                        _selectedIds.add(msg['id']);
-                      });
-                    }),
-              ]),
-            ));
-  }
-
-  void _showReactionPicker(String msgId) {
-    const emojis = ['👍', '❤️', '🔥', '😂', '😮', '😢', '🎉', '👏'];
-    showModalBottomSheet(
-        context: context,
-        builder: (_) => SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: emojis.map((e) {
-                      return GestureDetector(
-                        onTap: () {
-                          Navigator.pop(context);
-                          _toggleReaction(msgId, e);
-                        },
-                        child: Container(
-                          width: 52,
-                          height: 52,
-                          decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.06),
-                              borderRadius: BorderRadius.circular(14)),
-                          alignment: Alignment.center,
-                          child: Text(e,
-                              style: const TextStyle(fontSize: 26)),
-                        ),
-                      );
-                    }).toList()),
-              ),
-            ));
-  }
-
-  // ── 3-DOT MENU ────────────────────────────────────────────────────
-  void _showMoreMenu() {
-    showModalBottomSheet(
-        context: context,
-        builder: (_) => SafeArea(
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                ListTile(
-                    leading: const Icon(Icons.info_outline),
-                    title: const Text('Channel Info'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.pushNamed(context, '/channel_info',
-                          arguments: {'channelId': widget.channelId});
-                    }),
-                ListTile(
-                    leading: const Icon(Icons.share_outlined),
-                    title: const Text('Share Link'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _showSnack('Channel link copied');
-                    }),
-                ListTile(
-                    leading: Icon(
-                        _isMuted
-                            ? Icons.notifications_active_outlined
-                            : Icons.notifications_off_outlined),
-                    title: Text(_isMuted ? 'Unmute' : 'Mute'),
-                    onTap: () async {
-                      Navigator.pop(context);
-                      await FirebaseFirestore.instance
-                          .collection('chats')
-                          .doc(widget.channelId)
-                          .update({
-                        'muted_by': _isMuted
-                            ? FieldValue.arrayRemove([_currentUserId])
-                            : FieldValue.arrayUnion([_currentUserId])
-                      });
-                    }),
-                if (_isAdmin) ...[
-                  ListTile(
-                      leading: const Icon(Icons.edit_outlined),
-                      title: const Text('Edit Channel'),
-                      onTap: () {
-                        Navigator.pop(context);
-                        Navigator.pushNamed(context, '/edit_channel',
-                            arguments: {'channelId': widget.channelId});
-                      }),
-                  ListTile(
-                      leading: const Icon(Icons.forum_outlined),
-                      title: Text(
-                          _channelData?['discussion_chat_id'] != null
-                              ? 'Unlink Discussion'
-                              : 'Link Discussion'),
-                      onTap: () {
-                        Navigator.pop(context);
-                        _toggleDiscussionLink();
-                      }),
-                  if (_subscriberCount >= 500)
-                    ListTile(
-                        leading: const Icon(Icons.bar_chart),
-                        title: const Text('Channel Stats'),
-                        onTap: () {
-                          Navigator.pop(context);
-                          Navigator.pushNamed(context, '/channel_stats',
-                              arguments: {'channelId': widget.channelId});
-                        }),
-                  ListTile(
-                      leading: const Icon(Icons.rocket_launch_outlined),
-                      title: const Text('Boost Channel'),
-                      onTap: () {
-                        Navigator.pop(context);
-                        _showSnack('Boost coming soon');
-                      }),
-                  if (_isMePremium || _isMeStar)
-                    ListTile(
-                        leading: const Icon(Icons.wallpaper_outlined),
-                        title: const Text('Set Wallpaper'),
-                        onTap: () {
-                          Navigator.pop(context);
-                          _setWallpaper();
-                        }),
-                ],
-                ListTile(
-                    leading: const Icon(Icons.cleaning_services_outlined),
-                    title: const Text('Clear History'),
-                    onTap: () async {
-                      Navigator.pop(context);
-                      final prefs = await SharedPreferences.getInstance();
-                      await prefs.remove(
-                          'channel_${widget.channelId}_messages');
-                      setState(() => _messages = []);
-                    }),
-                if (!_isAdmin)
-                  ListTile(
-                      leading:
-                          const Icon(Icons.exit_to_app, color: Colors.red),
-                      title: const Text('Leave Channel',
-                          style: TextStyle(color: Colors.red)),
-                      onTap: () {
-                        Navigator.pop(context);
-                        _leaveChannel();
-                      }),
-                if (_isOwner)
-                  ListTile(
-                      leading: const Icon(Icons.delete_forever,
-                          color: Colors.red),
-                      title: const Text('Delete Channel',
-                          style: TextStyle(color: Colors.red)),
-                      onTap: () {
-                        Navigator.pop(context);
-                        _deleteChannel();
-                      }),
-              ]),
-            ));
-  }
-
-  Future<void> _toggleDiscussionLink() async {
-    if (_channelData?['discussion_chat_id'] != null) {
-      await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(widget.channelId)
-          .update({'discussion_chat_id': FieldValue.delete()});
-      _showSnack('Discussion unlinked');
-    } else {
-      Navigator.pushNamed(context, '/link_discussion',
-          arguments: {'channelId': widget.channelId});
-    }
-  }
-
-  Future<void> _leaveChannel() async {
-    await FirebaseFirestore.instance
-        .collection('chats')
-        .doc(widget.channelId)
-        .update({
-      'participants': FieldValue.arrayRemove([_currentUserId]),
-    });
-    if (mounted) Navigator.pop(context);
-  }
-
-  Future<void> _deleteChannel() async {
-    final confirm = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-              title: const Text('Delete Channel?'),
-              content: const Text(
-                  'This will permanently delete the channel and all posts.'),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.pop(ctx, false),
-                    child: const Text('Cancel')),
-                TextButton(
-                    onPressed: () => Navigator.pop(ctx, true),
-                    child: const Text('Delete',
-                        style: TextStyle(color: Colors.red))),
-              ],
-            ));
-    if (confirm != true) return;
-    await FirebaseFirestore.instance
-        .collection('chats')
-        .doc(widget.channelId)
-        .delete();
-    if (mounted) Navigator.pop(context);
-  }
-
-  Future<void> _setWallpaper() async {
-    // Admin with premium/star can propose; owner sets immediately.
-    final x = await _picker.pickImage(
-        source: ImageSource.gallery, imageQuality: 85);
-    if (x == null) return;
-    _showSnack('Uploading wallpaper...');
-    final url = await CloudinaryService.uploadImage(
-        File(x.path), 'luma/channel_walls');
-    if (url == null) return;
-
-    if (_isOwner) {
-      await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(widget.channelId)
-          .update({'wallpaper_url': url});
-      _showSnack('Wallpaper set for everyone');
-    } else {
-      // Admin proposes — owner must approve
-      await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(widget.channelId)
-          .collection('wallpaper_requests')
-          .add({
-        'requested_by': _currentUserId,
-        'url': url,
-        'created_at': FieldValue.serverTimestamp(),
-        'status': 'pending',
-      });
-      _showSnack('Wallpaper request sent to owner');
-    }
-  }
-
-  Widget _buildMultiSelectBar(ThemeData theme) {
-    return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        color: theme.colorScheme.surfaceVariant.withOpacity(0.5),
-        child: Row(children: [
-          IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: () => setState(() {
-                    _multiSelectMode = false;
-                    _selectedIds.clear();
-                  })),
-          Text('${_selectedIds.length} selected',
-              style: const TextStyle(fontWeight: FontWeight.bold)),
-          const Spacer(),
-          if (_isAdmin)
-            IconButton(
-                icon: const Icon(Icons.delete, color: Colors.red),
-                onPressed: () async {
-                  for (final id in _selectedIds) {
-                    await FirebaseFirestore.instance
-                        .collection('chats')
-                        .doc(widget.channelId)
-                        .collection('messages')
-                        .doc(id)
-                        .update(
-                            {'deleted_for_everyone': true, 'text': 'Deleted'});
-                  }
-                  setState(() {
-                    _multiSelectMode = false;
-                    _selectedIds.clear();
-                  });
-                }),
-        ]));
-  }
-}
-
-class _ImageViewerScreen extends StatelessWidget {
-  final String imagePath;
-  const _ImageViewerScreen({required this.imagePath});
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        backgroundColor: Colors.black,
-        appBar: AppBar(
-            backgroundColor: Colors.black,
-            leading: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white),
-                onPressed: () => Navigator.pop(context))),
-        body: Center(child: Image.file(File(imagePath))),
-      );
 }
