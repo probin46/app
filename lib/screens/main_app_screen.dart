@@ -11,6 +11,7 @@ import 'dart:convert';
 import '../providers/auth_provider.dart' show LumaAuthProvider;
 import '../providers/chat_provider.dart';
 import 'chat/group_chat_screen.dart';
+import 'chat/chat_screen.dart'; // ✅ ADDED: Import ChatScreen
 import 'contacts/contacts_screen.dart';
 import 'status/status_screen.dart';
 import 'settings/settings_screen.dart';
@@ -280,13 +281,26 @@ class _MainAppScreenState extends State<MainAppScreen> {
         ),
       );
     } else {
-      Navigator.pushNamed(context, '/chat', arguments: {
-        'chatId': chatId,
-        'chatName': name,
-        'chatAvatar': avatar,
-        'isGroup': false,
-        'otherUserId': otherUserId,
-      });
+      // ✅ Safety check: Make sure we actually have a user ID to open the DM
+      if (otherUserId == null || otherUserId.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not determine the other user for this chat.')),
+        );
+        return;
+      }
+
+      // ✅ FIXED: Direct push to ChatScreen so the data is not lost
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            chatId: chatId,
+            chatName: name,
+            chatAvatar: avatar,
+            otherUserId: otherUserId,
+          ),
+        ),
+      );
     }
   }
 
