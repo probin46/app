@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data'; // ✅ FIXED: Added for Uint8List
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:provider/provider.dart';
@@ -16,7 +16,6 @@ import 'package:uuid/uuid.dart';
 import '../../providers/auth_provider.dart' show LumaAuthProvider;
 import '../../services/cloudinary_service.dart';
 
-// Your Giphy API Key
 const String _kGiphyApiKey = '7tXB3cisPGymcszQX85JFOY6kp3Gz47T';
 
 class ChannelScreen extends StatefulWidget {
@@ -39,18 +38,15 @@ class _ChannelScreenState extends State<ChannelScreen> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
   final _gifSearchController = TextEditingController();
-  final _picker = ImagePicker();
   
   bool _hasText = false;
-  int _activePanel = 0; // 0 = none, 1 = emoji, 2 = gifs, 3 = stickers
+  int _activePanel = 0; 
   
   String? _currentUserId;
 
-  // GIF State
   List<String> _gifResults = [];
   bool _isLoadingGifs = false;
 
-  // Custom Stickers State
   List<String> _customStickers = [];
   final List<String> _defaultStickers = [
     'https://cdn-icons-png.flaticon.com/512/11254/11254647.png',
@@ -73,7 +69,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
     });
     final auth = Provider.of<LumaAuthProvider>(context, listen: false);
     _currentUserId = auth.user?.uid ?? auth.mockUserId;
-    
     _loadCustomStickers();
   }
 
@@ -85,9 +80,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
     super.dispose();
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // CUSTOM GALLERY
-  // ═══════════════════════════════════════════════════════════════════════
   Future<List<AssetEntity>> _loadCustomGalleryAssets() async {
     final ps = await PhotoManager.requestPermissionExtend();
     if (!ps.hasAccess) throw Exception('Permission denied');
@@ -180,9 +172,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
     );
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // UPLOAD LOGIC
-  // ═══════════════════════════════════════════════════════════════════════
   Future<void> _uploadAndSendCustomSticker(File image) async {
     try {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Creating sticker...')));
@@ -190,8 +179,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
       if (url != null) {
         await _saveCustomSticker(url);
         await _sendMessage(type: 'sticker', mediaUrl: url);
-      } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Upload failed')));
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
@@ -204,17 +191,12 @@ class _ChannelScreenState extends State<ChannelScreen> {
       final url = await CloudinaryService.uploadImage(image, 'luma/chats');
       if (url != null) {
         await _sendMessage(type: 'image', mediaUrl: url);
-      } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Upload failed')));
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // CUSTOM STICKER STORAGE
-  // ═══════════════════════════════════════════════════════════════════════
   Future<void> _loadCustomStickers() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getStringList('my_custom_stickers') ?? [];
@@ -229,9 +211,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
     _loadCustomStickers(); 
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // GIPHY API SEARCH
-  // ═══════════════════════════════════════════════════════════════════════
   Future<void> _searchGifs(String query) async {
     if (query.trim().isEmpty) return;
     setState(() => _isLoadingGifs = true);
@@ -252,9 +231,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // SENDING LOGIC
-  // ═══════════════════════════════════════════════════════════════════════
   Future<void> _sendMessage({String type = 'text', String? mediaUrl, String? text}) async {
     if (_currentUserId == null) return;
     
@@ -284,9 +260,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // UI BUILDERS
-  // ═══════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -309,7 +282,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
     );
   }
 
-  // ─── HEADER ───
   Widget _buildHeader(bool isDark) {
     return SafeArea(
       bottom: false,
@@ -400,7 +372,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
     );
   }
 
-  // ─── MESSAGE LIST ───
   Widget _buildMessageList(bool isDark) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _msgsRef.orderBy('created_at', descending: true).limit(100).snapshots(),
@@ -435,7 +406,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
                 decoration: type == 'sticker' || type == 'gif' 
                     ? null 
                     : BoxDecoration(
-                        // Gold tint for channel broadcast messages
                         color: isMe 
                             ? const Color(0xFFFFF9E6)
                             : (isDark ? const Color(0xFF1F2C34) : Colors.white),
@@ -485,7 +455,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
     );
   }
 
-  // ─── PANELS (Emoji, GIFs, Stickers) ───
   Widget _buildPanel(bool isDark) {
     if (_activePanel == 1) {
       return SizedBox(
@@ -629,7 +598,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
     return const SizedBox.shrink();
   }
 
-  // ─── CHANNEL BROADCAST COMPOSER ───
   Widget _buildBottomComposer(bool isDark) {
     return SafeArea(
       child: Padding(
@@ -637,7 +605,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            // THE PILL INPUT FIELD
             Expanded(
               child: Container(
                 decoration: BoxDecoration(
@@ -647,7 +614,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
                 ),
                 child: Row(
                   children: [
-                    // EMOJI TOGGLE
                     IconButton(
                       icon: Icon(
                         _activePanel == 1 ? Icons.keyboard : Icons.emoji_emotions_outlined, 
@@ -658,7 +624,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
                         setState(() => _activePanel = _activePanel == 1 ? 0 : 1);
                       },
                     ),
-                    // TEXT FIELD
                     Expanded(
                       child: TextField(
                         controller: _messageController,
@@ -674,7 +639,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
                         maxLines: null,
                       ),
                     ),
-                    // STICKER TOGGLE
                     IconButton(
                       icon: const Icon(Icons.emoji_emotions, color: Colors.grey),
                       onPressed: () {
@@ -682,7 +646,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
                         setState(() => _activePanel = _activePanel == 3 ? 0 : 3);
                       },
                     ),
-                    // GIF TOGGLE
                     IconButton(
                       icon: const Icon(Icons.gif_box_outlined, color: Colors.grey),
                       onPressed: () {
@@ -690,14 +653,12 @@ class _ChannelScreenState extends State<ChannelScreen> {
                         setState(() => _activePanel = _activePanel == 2 ? 0 : 2);
                       },
                     ),
-                    // ATTACHMENT
                     IconButton(
                       icon: const Icon(Icons.attach_file, color: Colors.grey),
                       onPressed: () {
                         _openCustomGallery(isSticker: false);
                       },
                     ),
-                    // CAMERA ICON (Opens Custom Gallery)
                     IconButton(
                       icon: const Icon(Icons.camera_alt_outlined, color: Colors.grey),
                       onPressed: () {
@@ -712,7 +673,6 @@ class _ChannelScreenState extends State<ChannelScreen> {
             
             const SizedBox(width: 8),
             
-            // GOLD SEND BUTTON (Channels do not have a mic button)
             GestureDetector(
               onTap: () {
                 if (_hasText) {
@@ -723,7 +683,7 @@ class _ChannelScreenState extends State<ChannelScreen> {
                 width: 48,
                 height: 48,
                 decoration: const BoxDecoration(
-                  color: Color(0xFFC9A027), // Gold
+                  color: Color(0xFFC9A027),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(Icons.send, color: Colors.white, size: 24),
