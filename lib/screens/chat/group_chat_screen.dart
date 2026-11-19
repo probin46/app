@@ -24,6 +24,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'screens/profile/public_profile_screen.dart';
 import 'package:photo_manager/photo_manager.dart' hide LatLng;
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -2239,215 +2240,356 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     return Icon(Icons.done, size: 15, color: base);
   }
 
-  Widget _buildMessageRow(
-    Map<String, dynamic> m,
-    Map<String, dynamic>? older,
-    Map<String, dynamic>? newer,
-    bool showDate,
-    bool showDivider,
-    ThemeData theme,
-    bool isDark,
-  ) {
-    if (m['type'] == 'system') return _systemRow(m, theme, isDark);
 
-    final id = m['id'].toString();
-    final senderId = m['sender_id']?.toString();
-    final isMe = senderId == _currentUserId;
-    final newerSame = newer != null &&
-        newer['type'] != 'system' &&
-        newer['sender_id'] == m['sender_id'] &&
-        _sameDay(_msgTime(m), _msgTime(newer)) &&
-        newer['id'] != _dividerAnchorId;
-    final olderSame = older != null &&
-        older['type'] != 'system' &&
-        older['sender_id'] == m['sender_id'] &&
-        !showDate &&
-        !showDivider;
-    final showName = !isMe && !olderSame;
-    final showAvatar = !isMe && !newerSame;
-    final lastInGroup = !newerSame;
-    final selected = _selectedIds.contains(id);
+Widget _buildMessageRow(
+  Map<String, dynamic> m,
+  Map<String, dynamic>? older,
+  Map<String, dynamic>? newer,
+  bool showDate,
+  bool showDivider,
+  ThemeData theme,
+  bool isDark,
+) {
+  if (m['type'] == 'system') return _systemRow(m, theme, isDark);
 
-    final baseColor = isMe
-        ? (isDark ? const Color(0xFF005C4B) : const Color(0xFFEFFDDE))
-        : (isDark ? const Color(0xFF1F2C34) : Colors.white);
-    var bubbleColor = baseColor;
-    if (selected) bubbleColor = Color.alphaBlend(_kAccent.withOpacity(0.3), baseColor);
-    if (_highlightId == id) bubbleColor = Color.alphaBlend(_kAccent.withOpacity(0.35), baseColor);
+  final id = m['id'].toString();
+  final senderId = m['sender_id']?.toString();
+  final isMe = senderId == _currentUserId;
 
-    final maxW = MediaQuery.of(context).size.width * 0.78;
-    final nameColor = _colorForUid(senderId);
-    final role = senderId != null ? _roleOf(senderId) : 'member';
-    final metaColor = theme.colorScheme.onSurface.withOpacity(0.5);
+  final newerSame = newer != null &&
+      newer['type'] != 'system' &&
+      newer['sender_id'] == m['sender_id'] &&
+      _sameDay(_msgTime(m), _msgTime(newer)) &&
+      newer['id'] != _dividerAnchorId;
 
-    final reactions = m['reactions'];
-    final hasReactions = reactions is Map && reactions.values.any((v) => v is List && v.isNotEmpty);
+  final olderSame = older != null &&
+      older['type'] != 'system' &&
+      older['sender_id'] == m['sender_id'] &&
+      !showDate &&
+      !showDivider;
 
-    final bubble = AnimatedContainer(
-      duration: const Duration(milliseconds: 250),
-      constraints: BoxConstraints(maxWidth: maxW),
-      padding: const EdgeInsets.fromLTRB(10, 7, 10, 6),
-      decoration: BoxDecoration(
-        color: bubbleColor,
-        borderRadius: BorderRadius.only(
-          topLeft: const Radius.circular(16),
-          topRight: const Radius.circular(16),
-          bottomLeft: Radius.circular((!isMe && lastInGroup) ? 4 : 16),
-          bottomRight: Radius.circular((isMe && lastInGroup) ? 4 : 16),
+  final showName = !isMe && !olderSame;
+  final showAvatar = !isMe && !newerSame;
+  final lastInGroup = !newerSame;
+  final selected = _selectedIds.contains(id);
+
+  final baseColor = isMe
+      ? (isDark ? const Color(0xFF005C4B) : const Color(0xFFEFFDDE))
+      : (isDark ? const Color(0xFF1F2C34) : Colors.white);
+
+  var bubbleColor = baseColor;
+
+  if (selected) {
+    bubbleColor = Color.alphaBlend(
+      _kAccent.withOpacity(0.3),
+      baseColor,
+    );
+  }
+
+  if (_highlightId == id) {
+    bubbleColor = Color.alphaBlend(
+      _kAccent.withOpacity(0.35),
+      baseColor,
+    );
+  }
+
+  final maxW = MediaQuery.of(context).size.width * 0.78;
+  final nameColor = _colorForUid(senderId);
+  final role = senderId != null ? _roleOf(senderId) : 'member';
+  final metaColor = theme.colorScheme.onSurface.withOpacity(0.5);
+
+  final reactions = m['reactions'];
+  final hasReactions = reactions is Map &&
+      reactions.values.any(
+        (v) => v is List && v.isNotEmpty,
+      );
+
+  final bubble = AnimatedContainer(
+    duration: const Duration(milliseconds: 250),
+    constraints: BoxConstraints(maxWidth: maxW),
+    padding: const EdgeInsets.fromLTRB(10, 7, 10, 6),
+    decoration: BoxDecoration(
+      color: bubbleColor,
+      borderRadius: BorderRadius.only(
+        topLeft: const Radius.circular(16),
+        topRight: const Radius.circular(16),
+        bottomLeft: Radius.circular(
+          (!isMe && lastInGroup) ? 4 : 16,
         ),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 2, offset: const Offset(0, 1))],
+        bottomRight: Radius.circular(
+          (isMe && lastInGroup) ? 4 : 16,
+        ),
+      ),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.06),
+          blurRadius: 2,
+          offset: const Offset(0, 1),
+        ),
+      ],
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (showName)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: GestureDetector(
+  behavior: HitTestBehavior.opaque,
+  onTap: () => _openMemberProfile(senderId),
+  child: Text(
+    _nameOf(senderId),
+    maxLines: 1,
+    overflow: TextOverflow.ellipsis,
+    style: TextStyle(
+      fontSize: 13,
+      fontWeight: FontWeight.w700,
+      color: nameColor,
+    ),
+  ),
+),
+                ),
+                if (role == 'owner' || role == 'admin') ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 1,
+                    ),
+                    decoration: BoxDecoration(
+                      color: (role == 'owner'
+                              ? const Color(0xFFE5B35C)
+                              : _kAccent)
+                          .withOpacity(0.18),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      role == 'owner' ? 'owner' : 'admin',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: role == 'owner'
+                            ? const Color(0xFFB8860B)
+                            : _kAccent,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+        if (m['forwarded_from'] != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              'Forwarded from ${m['forwarded_from']}',
+              style: const TextStyle(
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+                color: _kAccent,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+
+        if (m['reply_to'] != null)
+          SizedBox(
+            width: double.infinity,
+            child: _quotedReply(m),
+          ),
+
+        ..._contentWidgets(m, isMe, theme, isDark),
+
+        const SizedBox(height: 2),
+
+        Align(
+          alignment: Alignment.centerRight,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (m['edited'] == true)
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: Text(
+                    'edited',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontStyle: FontStyle.italic,
+                      color: metaColor,
+                    ),
+                  ),
+                ),
+
+              Text(
+                DateFormat('HH:mm').format(_msgTime(m)),
+                style: TextStyle(
+                  fontSize: 10,
+                  color: metaColor,
+                ),
+              ),
+
+              if (isMe) ...[
+                const SizedBox(width: 3),
+                _tickIcon(m, metaColor),
+              ],
+            ],
+          ),
+        ),
+
+        if (hasReactions) _reactionsRow(m),
+      ],
+    ),
+  );
+
+  final row = Row(
+    mainAxisAlignment:
+        isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+    crossAxisAlignment: CrossAxisAlignment.end,
+    children: [
+      if (_multiSelectMode)
+        Padding(
+          padding: const EdgeInsets.only(right: 6, left: 2),
+          child: Icon(
+            selected
+                ? Icons.check_circle
+                : Icons.radio_button_unchecked,
+            color: selected ? _kAccent : Colors.grey,
+            size: 22,
+          ),
+        ),
+
+      if (!isMe)
+        SizedBox(
+          width: 32,
+          child: showAvatar
+              ? GestureDetector(
+    onTap: () => _openMemberProfile(senderId),
+    child: CircleAvatar(
+      radius: 16,
+      backgroundColor: nameColor.withOpacity(0.25),
+      backgroundImage: _avatarOf(senderId) != null
+          ? CachedNetworkImageProvider(_avatarOf(senderId)!)
+          : null,
+      child: _avatarOf(senderId) == null
+          ? Text(
+              _nameOf(senderId).isNotEmpty
+                  ? _nameOf(senderId)[0].toUpperCase()
+                  : '?',
+              style: TextStyle(
+                color: nameColor,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            )
+          : null,
+    ),
+  )
+              : null,
+        ),
+
+      if (!isMe) const SizedBox(width: 6),
+
+      Flexible(
+        child: GestureDetector(
+          onTap: _multiSelectMode
+              ? () => setState(() {
+                    selected
+                        ? _selectedIds.remove(id)
+                        : _selectedIds.add(id);
+
+                    if (_selectedIds.isEmpty) {
+                      _multiSelectMode = false;
+                    }
+                  })
+              : null,
+          onDoubleTap: _multiSelectMode
+              ? null
+              : () => _toggleReaction(m, '❤️'),
+          onLongPress:
+              _multiSelectMode ? null : () => _showMessageMenu(m),
+          child: bubble,
+        ),
+      ),
+    ],
+  );
+
+  return Padding(
+    padding: EdgeInsets.only(
+      bottom: lastInGroup ? 6 : 2,
+    ),
+    child: _SwipeToReply(
+      enabled: !_multiSelectMode && _hardBlockReason() == null,
+      onReply: () => _startReply(m),
+      child: row,
+    ),
+  );
+}
+
+  
+Widget _quotedReply(Map<String, dynamic> m) {
+  final rid = m['reply_to']?.toString();
+  final orig = _findMessage(rid);
+  final name = (m['reply_to_sender'] ??
+          (orig != null
+              ? _nameOf(orig['sender_id']?.toString())
+              : 'Message'))
+      .toString();
+
+  final preview = orig != null
+      ? _stripFormatting(_previewOf(orig))
+      : _stripFormatting(
+          (m['reply_to_content'] ?? 'Message').toString());
+
+  final color = orig != null
+      ? _colorForUid(orig['sender_id']?.toString())
+      : _kAccent;
+
+  return GestureDetector(
+    onTap: () => _jumpToMessage(rid),
+    child: Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        border: Border(
+          left: BorderSide(color: color, width: 3),
+        ),
+        borderRadius: BorderRadius.circular(7),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (showName)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 2),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      _nameOf(senderId),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: nameColor),
-                    ),
-                  ),
-                  if (role == 'owner' || role == 'admin') ...[
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: (role == 'owner' ? const Color(0xFFE5B35C) : _kAccent).withOpacity(0.18),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        role == 'owner' ? 'owner' : 'admin',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: role == 'owner' ? const Color(0xFFB8860B) : _kAccent,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          if (m['forwarded_from'] != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Text(
-                'Forwarded from ${m['forwarded_from']}',
-                style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: _kAccent, fontWeight: FontWeight.w600),
-              ),
-            ),
-          if (m['reply_to'] != null) _quotedReply(m),
-          ..._contentWidgets(m, isMe, theme, isDark),
-          const SizedBox(height: 2),
-          Align(
-            alignment: Alignment.centerRight,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (m['edited'] == true)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 4),
-                    child: Text('edited', style: TextStyle(fontSize: 10, fontStyle: FontStyle.italic, color: metaColor)),
-                  ),
-                Text(DateFormat('HH:mm').format(_msgTime(m)), style: TextStyle(fontSize: 10, color: metaColor)),
-                if (isMe) ...[const SizedBox(width: 3), _tickIcon(m, metaColor)],
-              ],
+          Text(
+            name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
             ),
           ),
-          if (hasReactions) _reactionsRow(m),
+          const SizedBox(height: 2),
+          Text(
+            preview,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12.5),
+          ),
         ],
       ),
-    );
+    ),
+  );
+}
 
-    final row = Row(
-      mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        if (_multiSelectMode)
-          Padding(
-            padding: const EdgeInsets.only(right: 6, left: 2),
-            child: Icon(selected ? Icons.check_circle : Icons.radio_button_unchecked,
-                color: selected ? _kAccent : Colors.grey, size: 22),
-          ),
-        if (!isMe)
-          SizedBox(
-            width: 32,
-            child: showAvatar
-                ? CircleAvatar(
-                    radius: 16,
-                    backgroundColor: nameColor.withOpacity(0.25),
-                    backgroundImage: _avatarOf(senderId) != null ? CachedNetworkImageProvider(_avatarOf(senderId)!) : null,
-                    child: _avatarOf(senderId) == null
-                        ? Text(_nameOf(senderId).isNotEmpty ? _nameOf(senderId)[0].toUpperCase() : '?',
-                            style: TextStyle(color: nameColor, fontWeight: FontWeight.bold, fontSize: 13))
-                        : null,
-                  )
-                : null,
-          ),
-        if (!isMe) const SizedBox(width: 6),
-        Flexible(
-          child: GestureDetector(
-            onTap: _multiSelectMode
-                ? () => setState(() {
-                      selected ? _selectedIds.remove(id) : _selectedIds.add(id);
-                      if (_selectedIds.isEmpty) _multiSelectMode = false;
-                    })
-                : null,
-            onDoubleTap: _multiSelectMode ? null : () => _toggleReaction(m, '❤️'),
-            onLongPress: _multiSelectMode ? null : () => _showMessageMenu(m),
-            child: bubble,
-          ),
-        ),
-      ],
-    );
-
-    return Padding(
-      padding: EdgeInsets.only(bottom: lastInGroup ? 6 : 2),
-      child: _SwipeToReply(
-        enabled: !_multiSelectMode && _hardBlockReason() == null,
-        onReply: () => _startReply(m),
-        child: row,
-      ),
-    );
-  }
-
-  Widget _quotedReply(Map<String, dynamic> m) {
-    final rid = m['reply_to']?.toString();
-    final orig = _findMessage(rid);
-    final name = (m['reply_to_sender'] ?? (orig != null ? _nameOf(orig['sender_id']?.toString()) : 'Message')).toString();
-    final preview = orig != null
-        ? _stripFormatting(_previewOf(orig))
-        : _stripFormatting((m['reply_to_content'] ?? 'Message').toString());
-    final color = orig != null ? _colorForUid(orig['sender_id']?.toString()) : _kAccent;
-    return GestureDetector(
-      onTap: () => _jumpToMessage(rid),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 6),
-        padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.12),
-          border: Border(left: BorderSide(color: color, width: 3)),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700)),
-            Text(preview, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5)),
-          ],
-        ),
-      ),
-    );
-  }
 
   Widget _reactionsRow(Map<String, dynamic> m) {
     final r = m['reactions'];
@@ -2500,7 +2642,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         if (url != null) {
           out.add(ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: CachedNetworkImage(imageUrl: url, width: type == 'sticker' ? 150 : 220, fit: BoxFit.contain),
+            child: CachedNetworkImage(imageUrl: url, width: type == 'sticker' ? 130 : 190, fit: BoxFit.contain),
           ));
         }
         break;
@@ -2553,7 +2695,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
               width: 230,
               fit: BoxFit.cover,
               placeholder: (_, __) => Container(
-                width: 230,
+                width: 210,
                 height: 160,
                 color: Colors.black12,
                 alignment: Alignment.center,
@@ -3002,6 +3144,19 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   // ═══════════════════════════════════════════════════════════════════════
   // MORE MENU / SEARCH / WALLPAPER / LEAVE / PINS
   // ═══════════════════════════════════════════════════════════════════════
+  void _openMemberProfile(String? userId) {
+  if (userId == null || userId.isEmpty) return;
+
+  Navigator.pushNamed(
+    context,
+    '/public_profile',
+    arguments: {
+      'userId': userId,
+      'avatarUrl': _avatarOf(userId),
+    },
+  );
+}
+  
   void _showMoreMenu() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     showModalBottomSheet(
