@@ -175,6 +175,28 @@ Future<void> _openUrl(String url) async {
 // ═══════════════════════════════════════════════════════════════════════════
 // NATIVE RECORDER (talks directly to MainActivity.kt)
 // ═══════════════════════════════════════════════════════════════════════════
+
+class _ModalSlideRoute<T> extends PageRouteBuilder<T> {
+  final Widget child;
+  _ModalSlideRoute({required this.child})
+      : super(
+          opaque: false,
+          barrierDismissible: true,
+          barrierColor: Colors.black54,
+          barrierLabel: 'Dismiss',
+          pageBuilder: (_, __, ___) => child,
+          transitionDuration: const Duration(milliseconds: 280),
+          reverseTransitionDuration: const Duration(milliseconds: 240),
+          transitionsBuilder: (_, anim, __, c) {
+            final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
+            return SlideTransition(
+              position: Tween(begin: const Offset(0, 0.06), end: Offset.zero).animate(curved),
+              child: FadeTransition(opacity: curved, child: c),
+            );
+          },
+        );
+}
+
 class LocalRecorder {
   static const _channel = MethodChannel('com.lumachat.app/recorder');
   Future<void> start(String path) async => await _channel.invokeMethod('start', {'path': path});
@@ -1893,8 +1915,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   }
 
   void _openGroupInfo() {
-    Navigator.pushNamed(context, '/group_info', arguments: {'chatId': widget.chatId});
-  }
+  Navigator.of(context).push(
+    _ModalSlideRoute(
+      child: GroupInfoScreen(chatId: widget.chatId),
+    ),
+  );
+}
 
   void _onBackPressed() {
     if (_activePanel != null) {
@@ -2244,53 +2270,95 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     return Icon(Icons.done, size: 15, color: base);
   }
 
-  Widget _buildMessageRow(
-    Map<String, dynamic> m,
-    Map<String, dynamic>? older,
-    Map<String, dynamic>? newer,
-    bool showDate,
-    bool showDivider,
-    ThemeData theme,
-    bool isDark,
-  ) {
-    if (m['type'] == 'system') return _systemRow(m, theme, isDark);
+Widget _buildMessageRow(
+  Map<String, dynamic> m,
+  Map<String, dynamic>? older,
+  Map<String, dynamic>? newer,
+  bool showDate,
+  bool showDivider,
+  ThemeData theme,
+  bool isDark,
+) {
+  if (m['type'] == 'system') return _systemRow(m, theme, isDark);
 
-    final id = m['id'].toString();
-    final senderId = m['sender_id']?.toString();
-    final isMe = senderId == _currentUserId;
-    final newerSame = newer != null &&
-        newer['type'] != 'system' &&
-        newer['sender_id'] == m['sender_id'] &&
-        _sameDay(_msgTime(m), _msgTime(newer)) &&
-        newer['id'] != _dividerAnchorId;
-    final olderSame = older != null &&
-        older['type'] != 'system' &&
-        older['sender_id'] == m['sender_id'] &&
-        !showDate &&
-        !showDivider;
-    final showName = !isMe && !olderSame;
-    final showAvatar = !isMe && !newerSame;
-    final lastInGroup = !newerSame;
-    final selected = _selectedIds.contains(id);
+  final id = m['id'].toString();
+  final senderId = m['sender_id']?.toString();
+  final isMe = senderId == _currentUserId;
+  final type = (m['type'] ?? m['media_type'] ?? 'text').toString();
+  final isStickerOrGif = type == 'sticker' || type == 'gif';
 
-    final baseColor = isMe
-        ? (isDark ? const Color(0xFF005C4B) : const Color(0xFFEFFDDE))
-        : (isDark ? const Color(0xFF1F2C34) : Colors.white);
-    var bubbleColor = baseColor;
-    if (selected) bubbleColor = Color.alphaBlend(_kAccent.withOpacity(0.3), baseColor);
-    if (_highlightId == id) bubbleColor = Color.alphaBlend(_kAccent.withOpacity(0.35), baseColor);
+  final newerSame = newer != null &&
+      newer['type'] != 'system' &&
+      newer['sender_id'] == m['sender_id'] &&
+      _sameDay(_msgTime(m), _msgTime(newer)) &&
+      newer['id'] != _dividerAnchorId;
+  final olderSame = older != null &&
+      older['type'] != 'system' &&
+      older['sender_id'] == m['sender_id'] &&
+      !showDate &&
+      !showDivider;
+  final showName = !isMe && !olderSame && !isStickerOrGif;
+  final showAvatar = !isMe && !newerSame;
+  final lastInGroup = !newerSame;
+  final selected = _selectedIds.contains(id);
 
-    final maxW = MediaQuery.of(context).size.width * 0.78;
-    final nameColor = _colorForUid(senderId);
-    final role = senderId != null ? _roleOf(senderId) : 'member';
-    final metaColor = theme.colorScheme.onSurface.withOpacity(0.5);
+  final baseColor = isMe
+      ? (isDark ? const Color(0xFF005C4B) : const Color(0xFFEFFDDE))
+      : (isDark ? const Color(0xFF1F2C34) : Colors.white);
+  var bubbleColor = baseColor;
+  if (selected) bubbleColor = Color.alphaBlend(_kAccent.withOpacity(0.3), baseColor);
+  if (_highlightId == id) bubbleColor = Color.alphaBlend(_kAccent.withOpacity(0.35), baseColor);
 
-    final reactions = m['reactions'];
-    final hasReactions = reactions is Map && reactions.values.any((v) => v is List && v.isNotEmpty);
+  final maxW = MediaQuery.of(context).size.width * 0.72;
+  final nameColor = _colorForUid(senderId);
+  final role = senderId != null ? _roleOf(senderId) : 'member';
+  final metaColor = theme.colorScheme.onSurface.withOpacity(0.5);
 
-    final bubble = AnimatedContainer(
-      duration: const Duration(milliseconds: 250),
+  final reactions = m['reactions'];
+  final hasReactions = reactions is Map && reactions.values.any((v) => v is List && v.isNotEmpty);
+
+  Widget bubble;
+  if (isStickerOrGif) {
+    // Telegram-style: no bubble chrome, just the artwork + tiny time/ticks.
+    bubble = ConstrainedBox(
       constraints: BoxConstraints(maxWidth: maxW),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (m['forwarded_from'] != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                'Forwarded from ${m['forwarded_from']}',
+                style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: _kAccent, fontWeight: FontWeight.w600),
+              ),
+            ),
+          if (m['reply_to'] != null) _quotedReply(m),
+          ..._contentWidgets(m, isMe, theme, isDark),
+          const SizedBox(height: 2),
+          Align(
+            alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (m['edited'] == true)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: Text('edited', style: TextStyle(fontSize: 10, fontStyle: FontStyle.italic, color: metaColor)),
+                  ),
+                Text(DateFormat('HH:mm').format(_msgTime(m)), style: TextStyle(fontSize: 10, color: metaColor)),
+                if (isMe) ...[const SizedBox(width: 3), _tickIcon(m, metaColor)],
+              ],
+            ),
+          ),
+          if (hasReactions) _reactionsRow(m),
+        ],
+      ),
+    );
+  } else {
+    bubble = AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
       padding: const EdgeInsets.fromLTRB(10, 7, 10, 6),
       decoration: BoxDecoration(
         color: bubbleColor,
@@ -2371,69 +2439,76 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         ],
       ),
     );
-
-    final row = Row(
-      mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        if (_multiSelectMode)
-          Padding(
-            padding: const EdgeInsets.only(right: 6, left: 2),
-            child: Icon(selected ? Icons.check_circle : Icons.radio_button_unchecked,
-                color: selected ? _kAccent : Colors.grey, size: 22),
-          ),
-        if (!isMe)
-          SizedBox(
-            width: 32,
-            child: showAvatar
-                ? CircleAvatar(
-                    radius: 16,
-                    backgroundColor: nameColor.withOpacity(0.25),
-                    backgroundImage: _avatarOf(senderId) != null ? CachedNetworkImageProvider(_avatarOf(senderId)!) : null,
-                    child: _avatarOf(senderId) == null
-                        ? Text(_nameOf(senderId).isNotEmpty ? _nameOf(senderId)[0].toUpperCase() : '?',
-                            style: TextStyle(color: nameColor, fontWeight: FontWeight.bold, fontSize: 13))
-                        : null,
-                  )
-                : null,
-          ),
-        if (!isMe) const SizedBox(width: 6),
-        Flexible(
-          child: GestureDetector(
-            onTap: _multiSelectMode
-                ? () => setState(() {
-                      selected ? _selectedIds.remove(id) : _selectedIds.add(id);
-                      if (_selectedIds.isEmpty) _multiSelectMode = false;
-                    })
-                : null,
-            onDoubleTap: _multiSelectMode ? null : () => _toggleReaction(m, '❤️'),
-            onLongPress: _multiSelectMode ? null : () => _showMessageMenu(m),
-            child: bubble,
-          ),
-        ),
-      ],
-    );
-
-    return Padding(
-      padding: EdgeInsets.only(bottom: lastInGroup ? 6 : 2),
-      child: _SwipeToReply(
-        enabled: !_multiSelectMode && _hardBlockReason() == null,
-        onReply: () => _startReply(m),
-        child: row,
-      ),
-    );
   }
 
+  final row = Row(
+    mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+    crossAxisAlignment: CrossAxisAlignment.end,
+    children: [
+      if (_multiSelectMode)
+        Padding(
+          padding: const EdgeInsets.only(right: 6, left: 2),
+          child: Icon(selected ? Icons.check_circle : Icons.radio_button_unchecked,
+              color: selected ? _kAccent : Colors.grey, size: 22),
+        ),
+      if (!isMe)
+        SizedBox(
+          width: 32,
+          child: showAvatar
+              ? CircleAvatar(
+                  radius: 16,
+                  backgroundColor: nameColor.withOpacity(0.25),
+                  backgroundImage: _avatarOf(senderId) != null ? CachedNetworkImageProvider(_avatarOf(senderId)!) : null,
+                  child: _avatarOf(senderId) == null
+                      ? Text(_nameOf(senderId).isNotEmpty ? _nameOf(senderId)[0].toUpperCase() : '?',
+                          style: TextStyle(color: nameColor, fontWeight: FontWeight.bold, fontSize: 13))
+                      : null,
+                )
+              : null,
+        ),
+      if (!isMe) const SizedBox(width: 6),
+      ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxW),
+        child: GestureDetector(
+          onTap: _multiSelectMode
+              ? () => setState(() {
+                    selected ? _selectedIds.remove(id) : _selectedIds.add(id);
+                    if (_selectedIds.isEmpty) _multiSelectMode = false;
+                  })
+              : null,
+          onDoubleTap: _multiSelectMode ? null : () => _toggleReaction(m, '❤️'),
+          onLongPress: _multiSelectMode ? null : () => _showMessageMenu(m),
+          child: bubble,
+        ),
+      ),
+    ],
+  );
+
+  return Padding(
+    padding: EdgeInsets.only(bottom: lastInGroup ? 6 : 2),
+    child: _SwipeToReply(
+      enabled: !_multiSelectMode && _hardBlockReason() == null,
+      onReply: () => _startReply(m),
+      child: row,
+    ),
+  );
+}
+
   Widget _quotedReply(Map<String, dynamic> m) {
-    final rid = m['reply_to']?.toString();
-    final orig = _findMessage(rid);
-    final name = (m['reply_to_sender'] ?? (orig != null ? _nameOf(orig['sender_id']?.toString()) : 'Message')).toString();
-    final preview = orig != null
-        ? _stripFormatting(_previewOf(orig))
-        : _stripFormatting((m['reply_to_content'] ?? 'Message').toString());
-    final color = orig != null ? _colorForUid(orig['sender_id']?.toString()) : _kAccent;
-    return GestureDetector(
-      onTap: () => _jumpToMessage(rid),
+  final rid = m['reply_to']?.toString();
+  final orig = _findMessage(rid);
+  final name = (m['reply_to_sender'] ??
+          (orig != null ? _nameOf(orig['sender_id']?.toString()) : 'Message'))
+      .toString();
+  final preview = orig != null
+      ? _stripFormatting(_previewOf(orig))
+      : _stripFormatting((m['reply_to_content'] ?? 'Message').toString());
+  final color = orig != null ? _colorForUid(orig['sender_id']?.toString()) : _kAccent;
+
+  return GestureDetector(
+    onTap: () => _jumpToMessage(rid),
+    child: SizedBox(
+      width: double.infinity,
       child: Container(
         margin: const EdgeInsets.only(bottom: 6),
         padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
@@ -2446,13 +2521,24 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700)),
-            Text(preview, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5)),
+            Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700),
+            ),
+            Text(
+              preview,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12.5),
+            ),
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _reactionsRow(Map<String, dynamic> m) {
     final r = m['reactions'];
@@ -2501,14 +2587,26 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         if (url != null) out.add(_buildAudioBubble(m, isMe, theme));
         break;
       case 'sticker':
-      case 'gif':
-        if (url != null) {
-          out.add(ClipRRect(
+case 'gif':
+  if (url != null) {
+    final screenW = MediaQuery.of(context).size.width;
+    final maxBubble = screenW * 0.72;
+    final w = type == 'sticker'
+        ? math.min(140.0, maxBubble)
+        : math.min(280.0, maxBubble);
+    final img = CachedNetworkImage(
+      imageUrl: url,
+      width: w,
+      fit: BoxFit.contain,
+    );
+    out.add(type == 'sticker'
+        ? img
+        : ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: CachedNetworkImage(imageUrl: url, width: type == 'sticker' ? 150 : 220, fit: BoxFit.contain),
+            child: img,
           ));
-        }
-        break;
+  }
+  break;
       case 'file':
         if (url != null) out.add(_buildFileBubble(m, theme));
         break;
@@ -2546,46 +2644,62 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   }
 
   Widget _imageBubble(Map<String, dynamic> m, String url) {
-    return GestureDetector(
-      onTap: () => _openMedia(m),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: Stack(
-          alignment: Alignment.topRight,
-          children: [
-            CachedNetworkImage(
-              imageUrl: url,
-              width: 230,
-              fit: BoxFit.cover,
-              placeholder: (_, __) => Container(
-                width: 230,
-                height: 160,
-                color: Colors.black12,
-                alignment: Alignment.center,
-                child: const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
-              ),
-              errorWidget: (_, __, ___) => Container(
-                width: 230,
-                height: 120,
-                color: Colors.black12,
-                alignment: Alignment.center,
-                child: const Icon(Icons.broken_image, color: Colors.grey),
-              ),
+  final maxBubble = MediaQuery.of(context).size.width * 0.72;
+
+  return GestureDetector(
+    onTap: () => _openMedia(m),
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = math.min(maxBubble, constraints.maxWidth);
+          // Telegram-ish: aim for ~4:3 landscape, cap tall images at 4:5.
+          final previewH = math.min(w * 0.75, w * 1.25);
+
+          return SizedBox(
+            width: w,
+            height: previewH,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                CachedNetworkImage(
+                  imageUrl: url,
+                  fit: BoxFit.cover,
+                  placeholder: (_, __) => Container(
+                    color: Colors.black12,
+                    alignment: Alignment.center,
+                    child: const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                  errorWidget: (_, __, ___) => Container(
+                    color: Colors.black12,
+                    alignment: Alignment.center,
+                    child: const Icon(Icons.broken_image, color: Colors.grey),
+                  ),
+                ),
+                Positioned(
+                  top: 6,
+                  right: 6,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.45),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.download, size: 14, color: Colors.white),
+                  ),
+                ),
+              ],
             ),
-            Positioned(
-              top: 6,
-              right: 6,
-              child: Container(
-                padding: const EdgeInsets.all(4),
-                decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                child: const Icon(Icons.download, size: 16, color: Colors.white),
-              ),
-            ),
-          ],
-        ),
+          );
+        },
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildFileBubble(Map<String, dynamic> m, ThemeData theme) {
     final name = (m['file_name'] ?? 'File').toString();
