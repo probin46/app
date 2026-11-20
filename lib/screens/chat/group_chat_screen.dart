@@ -175,28 +175,6 @@ Future<void> _openUrl(String url) async {
 // ═══════════════════════════════════════════════════════════════════════════
 // NATIVE RECORDER (talks directly to MainActivity.kt)
 // ═══════════════════════════════════════════════════════════════════════════
-
-class _ModalSlideRoute<T> extends PageRouteBuilder<T> {
-  final Widget child;
-  _ModalSlideRoute({required this.child})
-      : super(
-          opaque: false,
-          barrierDismissible: true,
-          barrierColor: Colors.black54,
-          barrierLabel: 'Dismiss',
-          pageBuilder: (_, __, ___) => child,
-          transitionDuration: const Duration(milliseconds: 280),
-          reverseTransitionDuration: const Duration(milliseconds: 240),
-          transitionsBuilder: (_, anim, __, c) {
-            final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
-            return SlideTransition(
-              position: Tween(begin: const Offset(0, 0.06), end: Offset.zero).animate(curved),
-              child: FadeTransition(opacity: curved, child: c),
-            );
-          },
-        );
-}
-
 class LocalRecorder {
   static const _channel = MethodChannel('com.lumachat.app/recorder');
   Future<void> start(String path) async => await _channel.invokeMethod('start', {'path': path});
@@ -1043,11 +1021,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     _msgs.doc(msgId).set(payload).catchError((e) {
       _showSnack('Send failed: $e');
     });
-    _chatRef.update({
-      'last_message': _stripFormatting(_previewOf(payload)),
-      'last_message_at': FieldValue.serverTimestamp(),
-      'last_message_sender_id': me,
-    }).catchError((_) {});
     if (!_atBottom) {
       Future.delayed(const Duration(milliseconds: 200), _scrollToBottom);
     }
@@ -1915,12 +1888,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   }
 
   void _openGroupInfo() {
-  Navigator.of(context).push(
-    _ModalSlideRoute(
-      child: GroupInfoScreen(chatId: widget.chatId),
-    ),
-  );
-}
+    Navigator.pushNamed(context, '/group_info', arguments: {'chatId': widget.chatId});
+  }
 
   void _onBackPressed() {
     if (_activePanel != null) {
@@ -2270,7 +2239,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     return Icon(Icons.done, size: 15, color: base);
   }
 
-Widget _buildMessageRow(
+  Widget _buildMessageRow(
   Map<String, dynamic> m,
   Map<String, dynamic>? older,
   Map<String, dynamic>? newer,
@@ -2503,19 +2472,24 @@ Widget _buildMessageRow(
   final preview = orig != null
       ? _stripFormatting(_previewOf(orig))
       : _stripFormatting((m['reply_to_content'] ?? 'Message').toString());
-  final color = orig != null ? _colorForUid(orig['sender_id']?.toString()) : _kAccent;
+  final color = orig != null
+      ? _colorForUid(orig['sender_id']?.toString())
+      : _kAccent;
 
   return GestureDetector(
     onTap: () => _jumpToMessage(rid),
     child: SizedBox(
       width: double.infinity,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 6),
+        margin: const EdgeInsets.only(bottom: 4),
         padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.12),
+          color: color.withOpacity(0.14),
+          borderRadius: const BorderRadius.horizontal(
+            left: Radius.circular(4),
+            right: Radius.circular(4),
+          ),
           border: Border(left: BorderSide(color: color, width: 3)),
-          borderRadius: BorderRadius.circular(6),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -2525,13 +2499,23 @@ Widget _buildMessageRow(
               name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                color: color,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                height: 1.1,
+              ),
             ),
+            const SizedBox(height: 1),
             Text(
               preview,
-              maxLines: 2,
+              maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12.5),
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.15,
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.75),
+              ),
             ),
           ],
         ),
@@ -2644,62 +2628,46 @@ case 'gif':
   }
 
   Widget _imageBubble(Map<String, dynamic> m, String url) {
-  final maxBubble = MediaQuery.of(context).size.width * 0.72;
-
-  return GestureDetector(
-    onTap: () => _openMedia(m),
-    child: ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final w = math.min(maxBubble, constraints.maxWidth);
-          // Telegram-ish: aim for ~4:3 landscape, cap tall images at 4:5.
-          final previewH = math.min(w * 0.75, w * 1.25);
-
-          return SizedBox(
-            width: w,
-            height: previewH,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                CachedNetworkImage(
-                  imageUrl: url,
-                  fit: BoxFit.cover,
-                  placeholder: (_, __) => Container(
-                    color: Colors.black12,
-                    alignment: Alignment.center,
-                    child: const SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
-                  errorWidget: (_, __, ___) => Container(
-                    color: Colors.black12,
-                    alignment: Alignment.center,
-                    child: const Icon(Icons.broken_image, color: Colors.grey),
-                  ),
-                ),
-                Positioned(
-                  top: 6,
-                  right: 6,
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.45),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.download, size: 14, color: Colors.white),
-                  ),
-                ),
-              ],
+    return GestureDetector(
+      onTap: () => _openMedia(m),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Stack(
+          alignment: Alignment.topRight,
+          children: [
+            CachedNetworkImage(
+              imageUrl: url,
+              width: 230,
+              fit: BoxFit.cover,
+              placeholder: (_, __) => Container(
+                width: 210,
+                height: 160,
+                color: Colors.black12,
+                alignment: Alignment.center,
+                child: const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
+              ),
+              errorWidget: (_, __, ___) => Container(
+                width: 230,
+                height: 120,
+                color: Colors.black12,
+                alignment: Alignment.center,
+                child: const Icon(Icons.broken_image, color: Colors.grey),
+              ),
             ),
-          );
-        },
+            Positioned(
+              top: 6,
+              right: 6,
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                child: const Icon(Icons.download, size: 16, color: Colors.white),
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   Widget _buildFileBubble(Map<String, dynamic> m, ThemeData theme) {
     final name = (m['file_name'] ?? 'File').toString();
