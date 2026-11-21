@@ -7215,7 +7215,7 @@ class _MediaViewerScreenState extends State<_MediaViewerScreen> {
     final m = _m;
     final t = _msgTime(m);
     final cap = (m['text'] ?? '').toString();
-    final fade = 1 - math.min(1.0, _dy.abs() / 320);
+    final double fade = (1.0 - (_dy.abs() / 320.0)).clamp(0.0, 1.0).toDouble();
     final top = MediaQuery.of(context).padding.top;
     final bottom = MediaQuery.of(context).padding.bottom;
 
@@ -8311,7 +8311,7 @@ class _StrokePainter extends CustomPainter {
         canvas.drawCircle(pt(0), s.width / 2, paint..style = PaintingStyle.fill);
         continue;
       }
-      final path = Path()..moveTo(pt(0).dx, pt(0).dy);
+      final path = ui.Path()..moveTo(pt(0).dx, pt(0).dy);
       for (var i = 1; i < s.pts.length; i++) {
         final p = pt(i);
         final prev = pt(i - 1);
